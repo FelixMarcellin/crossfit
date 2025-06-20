@@ -12,11 +12,15 @@ from collections import defaultdict
 import re
 
 def parser_fichier_competition(contenu):
-    """Version robuste du parser qui gère les cas limites"""
+    """Parse le contenu du fichier de compétition"""
     heats = []
-    current_wod = "WOD 1"  # Valeur par défaut
+    current_wod = "WOD 1"
     current_heat = "Heat 1"
     current_time = "08:00-08:15"
+    
+    # Conversion si c'est un bytearray
+    if isinstance(contenu, (bytes, bytearray)):
+        contenu = contenu.decode('utf-8')
     
     for line in contenu.split('\n'):
         line = line.strip()
@@ -67,44 +71,32 @@ def main():
     
     # Upload des fichiers
     with st.sidebar:
-        st.header("1. Importation des fichiers")
+        st.header("Importation des fichiers")
         fichier_compet = st.file_uploader("Fichier compétition (CSV)", type=["csv", "txt"])
         fichier_juges = st.file_uploader("Liste des juges (CSV)", type=["csv", "txt"])
-        
-        st.header("2. Options")
-        tri_chrono = st.checkbox("Trier par ordre chronologique", True)
 
     if fichier_compet and fichier_juges:
         try:
             # Lecture des fichiers
-            contenu_compet = fichier_compet.read().decode("utf-8")
             juges = pd.read_csv(fichier_juges, header=None)[0].tolist()
             
-            # Validation des données
-            if not juges:
-                st.error("Le fichier des juges est vide ou mal formaté")
-                return
-                
+            # Lecture du contenu (gestion bytearray)
+            contenu_compet = fichier_compet.getvalue()
+            if isinstance(contenu_compet, (bytes, bytearray)):
+                contenu_compet = contenu_compet.decode('utf-8')
+            
             # Parsing
             heats = parser_fichier_competition(contenu_compet)
+            
             if not heats:
                 st.error("Aucune donnée valide trouvée dans le fichier de compétition")
                 return
-            
+                
             # Répartition
             judge_assignments = defaultdict(list)
-            judge_index = 0
-            
-            # Tri selon l'option choisie
-            heats_sorted = sorted(heats, key=lambda x: (
-                int(x['WOD'].split()[1]), 
-                x['Time']
-            )) if tri_chrono else heats
-            
-            for heat in heats_sorted:
-                judge = juges[judge_index % len(juges)]
+            for i, heat in enumerate(heats):
+                judge = juges[i % len(juges)]
                 judge_assignments[judge].append(heat)
-                judge_index += 1
             
             # Génération PDF
             pdf = FPDF()
@@ -117,28 +109,29 @@ def main():
                 pdf.ln(10)
                 
                 # En-têtes
+                headers = ["WOD", "Heat", "Horaire", "Lane", "Athlète", "Division"]
+                widths = [20, 20, 25, 15, 60, 30]
+                
                 pdf.set_font("Arial", 'B', 12)
-                pdf.cell(30, 10, "WOD", 1)
-                pdf.cell(25, 10, "Heat", 1)
-                pdf.cell(30, 10, "Horaire", 1)
-                pdf.cell(20, 10, "Lane", 1)
-                pdf.cell(70, 10, "Athlète", 1)
-                pdf.cell(30, 10, "Division", 1)
+                for header, width in zip(headers, widths):
+                    pdf.cell(width, 10, header, 1)
                 pdf.ln()
                 
                 # Données
                 pdf.set_font("Arial", size=10)
                 for assign in assignments:
-                    pdf.cell(30, 8, assign['WOD'], 1)
-                    pdf.cell(25, 8, assign['Heat'], 1)
-                    pdf.cell(30, 8, assign['Time'], 1)
-                    pdf.cell(20, 8, str(assign['Lane']), 1)
-                    pdf.cell(70, 8, assign['Athlete'][:35], 1)  # Tronquer si trop long
+                    pdf.cell(20, 8, assign['WOD'], 1)
+                    pdf.cell(20, 8, assign['Heat'], 1)
+                    pdf.cell(25, 8, assign['Time'], 1)
+                    pdf.cell(15, 8, str(assign['Lane']), 1)
+                    pdf.cell(60, 8, assign['Athlete'][:35], 1)  # Tronquer si trop long
                     pdf.cell(30, 8, assign['Division'], 1)
                     pdf.ln()
             
-            # Téléchargement
+            # Génération du PDF en mémoire
             pdf_output = pdf.output(dest='S').encode('latin1')
+            
+            # Téléchargement
             st.success("✅ Planning généré avec succès!")
             st.download_button(
                 "⬇️ Télécharger le PDF",
@@ -149,8 +142,6 @@ def main():
             
         except Exception as e:
             st.error(f"Erreur lors du traitement: {str(e)}")
-    else:
-        st.info("ℹ️ Veuillez uploader les deux fichiers pour continuer")
 
 if __name__ == "__main__":
     main()
