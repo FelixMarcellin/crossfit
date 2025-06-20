@@ -7,81 +7,66 @@ Created on Fri Jun 20 16:29:06 2025
 
 import streamlit as st
 import pandas as pd
-from fpdf import FPDF
-import math
-from collections import defaultdict
-import re
+from fpdf import FPDF  # Utilise fpdf2 en interne
 import base64
+import re
+from collections import defaultdict
 
-# Configuration de la page
-st.set_page_config(page_title="Planificateur Juges CrossFit", layout="wide")
-st.title("📋 Planificateur de Juges pour Compétition CrossFit")
-
-# Fonctions de traitement (conservées depuis votre code)
-def parser_fichier_competition(contenu):
-    heats = []
-    current_wod = None
-    current_heat = None
-    current_time = None
+def main():
+    st.title("📋 Planificateur de Juges CrossFit")
     
-    for line in contenu.split('\n'):
-        line = line.strip()
-        if "WOD" in line and "FINALE" in line:
-            wod_match = re.search(r'WOD (\d+)', line)
-            if wod_match: current_wod = f"WOD {int(wod_match.group(1))}"
-            continue
-        # [...] (le reste de votre fonction parser_fichier_competition adapté)
-
-def generer_pdf(judge_assignments):
-    pdf = FPDF()
-    # [...] (votre code de génération PDF)
-    return pdf.output(dest='S').encode('latin1')
-
-# Interface utilisateur
-with st.sidebar:
-    st.header("1. Importation des fichiers")
-    fichier_compet = st.file_uploader("📄 Fichier de compétition (CSV)", type="csv")
-    fichier_juges = st.file_uploader("👥 Liste des juges (CSV)", type="csv")
+    # Upload des fichiers
+    with st.sidebar:
+        st.header("Importation des fichiers")
+        file_compet = st.file_uploader("Fichier compétition (CSV)", type="csv")
+        file_judges = st.file_uploader("Liste des juges (CSV)", type="csv")
     
-    st.header("2. Paramètres")
-    tri_chrono = st.checkbox("Trier par ordre chronologique (WOD 1 → 2 → 3)", True)
+    if file_compet and file_judges:
+        try:
+            # Lecture des fichiers
+            juges = pd.read_csv(file_judges, header=None)[0].tolist()
+            compet_data = file_compet.read().decode('utf-8')
+            
+            # Parser le fichier (exemple simplifié)
+            heats = []
+            for line in compet_data.split('\n'):
+                if "WOD" in line:
+                    current_wod = line.split("WOD")[1].split()[0]
+                elif line.startswith(('1,', '2,', '3,')) and "EMPTY" not in line:
+                    parts = line.split(',')
+                    heats.append({
+                        'WOD': f"WOD {current_wod}",
+                        'Athlete': parts[1].strip(),
+                        'Lane': parts[0].strip()
+                    })
+            
+            # Répartition
+            judge_assign = {juge: [] for juge in juges}
+            for i, heat in enumerate(heats):
+                judge_assign[juges[i % len(juges)]].append(heat)
+            
+            # Génération PDF
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Arial", size=12)
+            
+            for juge, assignments in judge_assign.items():
+                pdf.cell(0, 10, f"Juge: {juge}", ln=1)
+                for assign in assignments:
+                    pdf.cell(0, 10, f"{assign['WOD']} - Lane {assign['Lane']}: {assign['Athlete']}", ln=1)
+                pdf.ln(5)
+            
+            # Téléchargement
+            pdf_output = pdf.output(dest='S').encode('latin1')
+            st.download_button(
+                "Télécharger le planning",
+                pdf_output,
+                "planning_juges.pdf",
+                "application/pdf"
+            )
+            
+        except Exception as e:
+            st.error(f"Erreur: {str(e)}")
 
-# Traitement lorsque les fichiers sont uploadés
-if fichier_compet and fichier_juges:
-    try:
-        # Chargement des données
-        juges = pd.read_csv(fichier_juges, header=None)[0].tolist()
-        contenu_compet = fichier_compet.getvalue().decode('utf-8')
-        heats = parser_fichier_competition(contenu_compet)
-        
-        # Répartition des juges
-        judge_assignments = defaultdict(list)
-        judge_index = 0
-        for heat in sorted(heats, key=lambda x: (int(x['WOD'].split()[1]), x['Time']) if tri_chrono else x['Time']):
-            judge = juges[judge_index]
-            judge_assignments[judge].append(heat)
-            judge_index = (judge_index + 1) % len(juges)
-        
-        # Génération du PDF
-        pdf_bytes = generer_pdf(judge_assignments)
-        
-        # Téléchargement
-        st.success("✅ Planning généré avec succès !")
-        st.download_button(
-            label="⬇️ Télécharger le PDF",
-            data=pdf_bytes,
-            file_name="Planning_Juges.pdf",
-            mime="application/pdf"
-        )
-        
-        # Aperçu des données
-        with st.expander("👀 Aperçu des assignations"):
-            st.write(f"Total heats : {len(heats)} | Nombre de juges : {len(juges)}")
-            for juge, assignments in judge_assignments.items():
-                st.write(f"**{juge}** : {len(assignments)} assignations")
-    
-    except Exception as e:
-        st.error(f"Erreur : {str(e)}")
-
-else:
-    st.info("ℹ️ Veuillez uploader les fichiers requis dans la barre latérale")
+if __name__ == '__main__':
+    main()
