@@ -5,6 +5,13 @@ Created on Mon Jun 23 14:47:51 2025
 @author: felima
 """
 
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jun 23 14:47:51 2025
+
+@author: felima
+"""
+
 import streamlit as st
 import pandas as pd
 from fpdf import FPDF
@@ -17,10 +24,10 @@ from typing import Dict, List
 st.set_page_config(page_title="Planning Juges CrossFit", layout="wide")
 st.title("🧑‍⚖️ Gestion des Juges - Unicorn Throwdown 2025")
 
-def generate_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
-    from fpdf import FPDF
 
-    pdf = FPDF(orientation='P', unit='mm', format='A4')
+def generate_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
+    """Génère un PDF avec mise en page tabulaire professionnelle"""
+    pdf = FPDF(orientation='P')
     pdf.set_auto_page_break(auto=True, margin=15)
 
     for juge, creneaux in planning.items():
@@ -29,66 +36,73 @@ def generate_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
         pdf.add_page()
 
-        # Titre
+        # En-tête
         pdf.set_font("Arial", 'B', 16)
-        pdf.cell(0, 10, "Unicorn Throwdown 2025", ln=1, align='C')
+        pdf.cell(0, 10, "Unicorn Throwdown 2025", 0, 1, 'C')
         pdf.set_font("Arial", 'B', 14)
-        pdf.cell(0, 10, f"Planning: {juge}", ln=1, align='C')
-        pdf.ln(5)
+        pdf.cell(0, 10, f"Planning: {juge}", 0, 1, 'C')
+        pdf.ln(10)
 
-        # En-tête tableau
-        headers = ["Heure", "Lane", "WOD", "Athlète", "Division", "Emplacement"]
+        # Définition du tableau
         col_widths = [30, 10, 15, 50, 25, 40]
+        headers = ["Heure", "Lane", "WOD", "Athlète", "Division", "Emplacement"]
+
+        # En-tête
+        pdf.set_fill_color(211, 211, 211)
         pdf.set_font("Arial", 'B', 10)
-        pdf.set_fill_color(200, 200, 200)
-        for header, width in zip(headers, col_widths):
-            pdf.cell(width, 8, header, border=1, align='C', fill=True)
+        for width, header in zip(col_widths, headers):
+            pdf.cell(width, 10, header, border=1, align='C', fill=True)
         pdf.ln()
 
-        # Données
-        pdf.set_font("Arial", '', 9)
+        # Contenu du tableau
+        pdf.set_font("Arial", size=9)
         row_colors = [(255, 255, 255), (240, 240, 240)]
 
-        for i, c in enumerate(creneaux):
-            fill = row_colors[i % 2]
-            pdf.set_fill_color(*fill)
+        for i, creneau in enumerate(creneaux):
+            pdf.set_fill_color(*row_colors[i % 2])
 
-            start = c['start']
-            end = c['end']
-            heure = f"{start if isinstance(start, str) else start.strftime('%H:%M')} - {end if isinstance(end, str) else end.strftime('%H:%M')}"
-            values = [
-                heure,
-                str(c['lane']),
-                c['wod'],
-                c['athlete'],
-                c['division'],
-                c['location']
+            # Formatage des heures
+            start = creneau['start']
+            end = creneau['end']
+            start_time = start if isinstance(start, str) else start.strftime('%H:%M')
+            end_time = end if isinstance(end, str) else end.strftime('%H:%M')
+
+            row_data = [
+                f"{start_time} - {end_time}",
+                str(creneau['lane']),
+                creneau['wod'],
+                creneau['athlete'],
+                creneau['division'],
+                creneau['location']
             ]
 
-            # Calcul hauteur max de la ligne
+            # Sauvegarde la position pour multi_cell
+            x_start = pdf.get_x()
+            y_start = pdf.get_y()
+            max_y = y_start
+
+            # Première passe pour mesurer les hauteurs
             heights = []
-            for val, w in zip(values, col_widths):
-                lines = pdf.multi_cell(w, 5, str(val), border=0, align='C', split_only=True)
-                heights.append(5 * len(lines))
-            max_h = max(heights)
+            for value, width in zip(row_data, col_widths):
+                nb_lines = len(pdf.multi_cell(width, 5, str(value), border=0, align='C', split_only=True))
+                heights.append(nb_lines * 5)
+            max_height = max(heights)
 
-            # Écriture cellule par cellule avec multi_cell
-            x = pdf.get_x()
-            y = pdf.get_y()
-            for val, w in zip(values, col_widths):
-                pdf.set_xy(x, y)
-                pdf.multi_cell(w, 5, str(val), border=1, align='C', fill=True)
-                x += w
-            pdf.ln(max_h)
+            # Deuxième passe pour dessiner chaque cellule
+            for j, (text, width) in enumerate(zip(row_data, col_widths)):
+                x = pdf.get_x()
+                y = pdf.get_y()
+                pdf.multi_cell(width, 5, str(text), border=1, align='C', fill=True)
+                pdf.set_xy(x + width, y)
+            pdf.ln(max_height)
 
-        # Résumé
-        pdf.ln(4)
+        # Pied de page
+        pdf.ln(10)
         pdf.set_font("Arial", 'I', 10)
         total_wods = len({c['wod'] for c in creneaux})
-        pdf.cell(0, 8, f"Total: {len(creneaux)} créneaux sur {total_wods} WODs", ln=1)
+        pdf.cell(0, 8, f"Total: {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
-
 
 
 def main():
@@ -96,24 +110,20 @@ def main():
         st.header("📤 Import des fichiers")
         schedule_file = st.file_uploader("Planning (Excel)", type=["xlsx"])
         judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
-    
+
     if schedule_file and judges_file:
         try:
-            # Lecture des fichiers
             schedule = pd.read_excel(schedule_file, engine='openpyxl')
             judges = pd.read_csv(judges_file, header=None)[0].dropna().tolist()
-            
-            # Nettoyage des données
+
             schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=True)]
             schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
-            
-            # Détection des WODs
+
             wods = sorted(schedule['Workout'].unique())
-            
-            # Interface de sélection
+
             st.header("📝 Disponibilité des Juges par WOD")
             disponibilites = {wod: set() for wod in wods}
-            
+
             cols = st.columns(3)
             for i, wod in enumerate(wods):
                 with cols[i % 3]:
@@ -123,21 +133,20 @@ def main():
                             judges,
                             key=f"dispo_{wod}"
                         ))
-            
-            # Génération du planning
+
             if st.button("✨ Générer les plannings"):
                 planning = {juge: [] for juge in judges}
-                
+
                 for _, row in schedule.iterrows():
                     wod = row['Workout']
                     juges_dispo = disponibilites[wod]
-                    
+
                     if not juges_dispo:
                         st.error(f"Aucun juge disponible pour le {wod}!")
                         continue
-                    
+
                     juge_attribue = min(juges_dispo, key=lambda j: len(planning[j]))
-                    
+
                     planning[juge_attribue].append({
                         'wod': wod,
                         'lane': row['Lane'],
@@ -147,10 +156,9 @@ def main():
                         'start': row['Heat Start Time'],
                         'end': row['Heat End Time']
                     })
-                
-                # Génération du PDF
+
                 pdf = generate_pdf({k: v for k, v in planning.items() if v})
-                
+
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                     pdf.output(tmp.name)
                     with open(tmp.name, "rb") as f:
@@ -161,20 +169,20 @@ def main():
                             mime="application/pdf"
                         )
                     os.unlink(tmp.name)
-                
-                # Affichage du récapitulatif
+
                 st.success("PDF généré avec succès!")
                 st.header("📊 Récapitulatif des affectations")
-                
+
                 for juge, creneaux in planning.items():
                     if creneaux:
                         with st.expander(f"Juge: {juge} ({len(creneaux)} créneaux)"):
                             st.table(pd.DataFrame(creneaux))
-        
+
         except Exception as e:
             st.error(f"Erreur lors du traitement: {str(e)}")
     else:
         st.info("Veuillez uploader les fichiers pour commencer")
+
 
 if __name__ == "__main__":
     main()
