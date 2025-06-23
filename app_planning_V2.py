@@ -18,48 +18,49 @@ st.set_page_config(page_title="Planning Juges CrossFit", layout="wide")
 st.title("🧑‍⚖️ Gestion des Juges - Unicorn Throwdown 2025")
 
 def generate_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
-    """Génère un PDF avec mise en page tabulaire professionnelle"""
+    """Génère un PDF avec une mise en page tabulaire améliorée (multi-lignes)"""
     pdf = FPDF(orientation='P')
     pdf.set_auto_page_break(auto=True, margin=15)
-    
+
     for juge, creneaux in planning.items():
-        if not creneaux:  # Ne pas créer de page pour les juges sans créneaux
+        if not creneaux:
             continue
-            
+
         pdf.add_page()
-        
+
         # En-tête
         pdf.set_font("Arial", 'B', 16)
         pdf.cell(0, 10, "Unicorn Throwdown 2025", 0, 1, 'C')
         pdf.set_font("Arial", 'B', 14)
         pdf.cell(0, 10, f"Planning: {juge}", 0, 1, 'C')
         pdf.ln(10)
-        
-        # Configuration du tableau
-        col_widths = [30, 10, 15, 50, 25, 40]  # Largeurs des colonnes
+
+        # Définition du tableau
+        col_widths = [30, 10, 15, 50, 25, 40]
         headers = ["Heure", "Lane", "WOD", "Athlète", "Division", "Emplacement"]
-        
-        # Couleurs
-        header_color = (211, 211, 211)  # Gris clair
-        row_colors = [(255, 255, 255), (240, 240, 240)]  # Alternance
-        
+
         # En-tête du tableau
-        pdf.set_fill_color(*header_color)
+        pdf.set_fill_color(211, 211, 211)
         pdf.set_font("Arial", 'B', 10)
         for width, header in zip(col_widths, headers):
-            pdf.cell(width, 10, header, 1, 0, 'C', True)
+            pdf.cell(width, 10, header, border=1, align='C', fill=True)
         pdf.ln()
-        
+
         # Contenu du tableau
         pdf.set_font("Arial", size=9)
+        row_colors = [(255, 255, 255), (240, 240, 240)]
+
         for i, creneau in enumerate(creneaux):
-            pdf.set_fill_color(*row_colors[i % 2])
-            
+            fill_color = row_colors[i % 2]
+            pdf.set_fill_color(*fill_color)
+
             # Formatage des heures
-            start_time = creneau['start'] if isinstance(creneau['start'], str) else creneau['start'].strftime('%H:%M')
-            end_time = creneau['end'] if isinstance(creneau['end'], str) else creneau['end'].strftime('%H:%M')
-            
-            cells = [
+            start = creneau['start']
+            end = creneau['end']
+            start_time = start if isinstance(start, str) else start.strftime('%H:%M')
+            end_time = end if isinstance(end, str) else end.strftime('%H:%M')
+
+            row_data = [
                 f"{start_time} - {end_time}",
                 str(creneau['lane']),
                 creneau['wod'],
@@ -67,18 +68,36 @@ def generate_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
                 creneau['division'],
                 creneau['location']
             ]
-            
-            for width, cell in zip(col_widths, cells):
-                pdf.cell(width, 8, str(cell), 1, 0, 'C', True)
-            pdf.ln()
-        
+
+            # Calcul de la hauteur de ligne max
+            line_heights = []
+            for value, width in zip(row_data, col_widths):
+                text_height = pdf.get_string_width(value) / width
+                num_lines = int(text_height) + 1
+                line_heights.append(5 * num_lines)
+            max_height = max(line_heights)
+
+            # Sauvegarde position actuelle
+            x_start = pdf.get_x()
+            y_start = pdf.get_y()
+
+            # Écriture cellule par cellule
+            for j, (cell_text, width) in enumerate(zip(row_data, col_widths)):
+                x = pdf.get_x()
+                y = pdf.get_y()
+                pdf.multi_cell(width, 5, str(cell_text), border=1, align='C', fill=True)
+                pdf.set_xy(x + width, y)
+
+            pdf.ln(max_height)
+
         # Pied de page
         pdf.ln(10)
         pdf.set_font("Arial", 'I', 10)
         total_wods = len({c['wod'] for c in creneaux})
         pdf.cell(0, 8, f"Total: {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
-    
+
     return pdf
+
 
 def main():
     with st.sidebar:
