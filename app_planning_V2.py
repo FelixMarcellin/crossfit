@@ -20,14 +20,12 @@ import os
 from datetime import datetime
 from typing import Dict, List
 
-# Configuration de l'application
 st.set_page_config(page_title="Planning Juges CrossFit", layout="wide")
 st.title("🧑‍⚖️ Gestion des Juges - Unicorn Throwdown 2025")
 
+def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
+    print("✅ Appel de generate_pdf_tableau() ✔️")
 
-def generate_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
-    print("🖨️ Appel de generate_pdf() pour la version avec tableau")
-    """Génère un PDF avec mise en page tabulaire professionnelle"""
     pdf = FPDF(orientation='P')
     pdf.set_auto_page_break(auto=True, margin=15)
 
@@ -44,67 +42,59 @@ def generate_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         pdf.cell(0, 10, f"Planning: {juge}", 0, 1, 'C')
         pdf.ln(10)
 
-        # Définition du tableau
+        # Colonnes
         col_widths = [30, 10, 15, 50, 25, 40]
         headers = ["Heure", "Lane", "WOD", "Athlète", "Division", "Emplacement"]
 
-        # En-tête
+        # En-tête tableau
         pdf.set_fill_color(211, 211, 211)
         pdf.set_font("Arial", 'B', 10)
-        for width, header in zip(col_widths, headers):
+        for header, width in zip(headers, col_widths):
             pdf.cell(width, 10, header, border=1, align='C', fill=True)
         pdf.ln()
 
-        # Contenu du tableau
-        pdf.set_font("Arial", size=9)
+        # Lignes
+        pdf.set_font("Arial", '', 9)
         row_colors = [(255, 255, 255), (240, 240, 240)]
 
-        for i, creneau in enumerate(creneaux):
+        for i, c in enumerate(creneaux):
             pdf.set_fill_color(*row_colors[i % 2])
 
-            # Formatage des heures
-            start = creneau['start']
-            end = creneau['end']
-            start_time = start if isinstance(start, str) else start.strftime('%H:%M')
-            end_time = end if isinstance(end, str) else end.strftime('%H:%M')
+            start_time = c['start'] if isinstance(c['start'], str) else c['start'].strftime('%H:%M')
+            end_time = c['end'] if isinstance(c['end'], str) else c['end'].strftime('%H:%M')
 
-            row_data = [
+            data = [
                 f"{start_time} - {end_time}",
-                str(creneau['lane']),
-                creneau['wod'],
-                creneau['athlete'],
-                creneau['division'],
-                creneau['location']
+                str(c['lane']),
+                c['wod'],
+                c['athlete'],
+                c['division'],
+                c['location']
             ]
 
-            # Sauvegarde la position pour multi_cell
-            x_start = pdf.get_x()
-            y_start = pdf.get_y()
-            max_y = y_start
-
-            # Première passe pour mesurer les hauteurs
+            # Calcul hauteur max de ligne
             heights = []
-            for value, width in zip(row_data, col_widths):
-                nb_lines = len(pdf.multi_cell(width, 5, str(value), border=0, align='C', split_only=True))
-                heights.append(nb_lines * 5)
+            for value, width in zip(data, col_widths):
+                lines = pdf.multi_cell(width, 5, str(value), border=0, align='C', split_only=True)
+                heights.append(len(lines) * 5)
             max_height = max(heights)
 
-            # Deuxième passe pour dessiner chaque cellule
-            for j, (text, width) in enumerate(zip(row_data, col_widths)):
+            # Dessin des cellules
+            x_init = pdf.get_x()
+            y_init = pdf.get_y()
+            for val, width in zip(data, col_widths):
                 x = pdf.get_x()
                 y = pdf.get_y()
-                pdf.multi_cell(width, 5, str(text), border=1, align='C', fill=True)
+                pdf.multi_cell(width, 5, str(val), border=1, align='C', fill=True)
                 pdf.set_xy(x + width, y)
             pdf.ln(max_height)
 
-        # Pied de page
         pdf.ln(10)
         pdf.set_font("Arial", 'I', 10)
         total_wods = len({c['wod'] for c in creneaux})
         pdf.cell(0, 8, f"Total: {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
-
 
 def main():
     with st.sidebar:
@@ -119,7 +109,6 @@ def main():
 
             schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=True)]
             schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
-
             wods = sorted(schedule['Workout'].unique())
 
             st.header("📝 Disponibilité des Juges par WOD")
@@ -158,7 +147,7 @@ def main():
                         'end': row['Heat End Time']
                     })
 
-                pdf = generate_pdf({k: v for k, v in planning.items() if v})
+                pdf = generate_pdf_tableau({k: v for k, v in planning.items() if v})
 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                     pdf.output(tmp.name)
@@ -173,7 +162,6 @@ def main():
 
                 st.success("PDF généré avec succès!")
                 st.header("📊 Récapitulatif des affectations")
-
                 for juge, creneaux in planning.items():
                     if creneaux:
                         with st.expander(f"Juge: {juge} ({len(creneaux)} créneaux)"):
@@ -183,7 +171,6 @@ def main():
             st.error(f"Erreur lors du traitement: {str(e)}")
     else:
         st.info("Veuillez uploader les fichiers pour commencer")
-
 
 if __name__ == "__main__":
     main()
