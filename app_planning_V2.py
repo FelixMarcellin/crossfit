@@ -26,6 +26,7 @@ st.title("🧑‍⚖️ Gestion des Juges - Unicorn Throwdown 2025")
 
 
 def generate_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
+    print("🖨️ Appel de generate_pdf() pour la version avec tableau")
     """Génère un PDF avec mise en page tabulaire professionnelle"""
     pdf = FPDF(orientation='P')
     pdf.set_auto_page_break(auto=True, margin=15)
