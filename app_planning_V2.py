@@ -94,6 +94,47 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         total_wods = len({c['wod'] for c in creneaux})
         pdf.cell(0, 8, f"Total: {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
+    return pdf 
+
+def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
+    from collections import defaultdict
+
+    print("✅ Appel de generate_heat_pdf() ✔️")
+
+    # Regrouper les créneaux par heat
+    heat_map = defaultdict(lambda: defaultdict(str))  # (start, end, wod, location) -> {lane: juge}
+
+    for juge, creneaux in planning.items():
+        for c in creneaux:
+            key = (str(c['start']), str(c['end']), c['wod'], c['location'])
+            heat_map[key][int(c['lane'])] = juge
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_font("Arial", '', 10)
+
+    heats = list(heat_map.items())
+    heats.sort(key=lambda x: x[0][0])  # tri par heure de début
+
+    for i in range(0, len(heats), 2):  # 2 heats par page
+        pdf.add_page()
+        for j in range(2):
+            if i + j >= len(heats):
+                break
+
+            (start, end, wod, location), lanes = heats[i + j]
+            pdf.set_font("Arial", 'B', 12)
+            pdf.cell(0, 8, f"📆 HEAT – {start} à {end}", ln=1)
+            pdf.set_font("Arial", '', 11)
+            pdf.cell(0, 6, f"🏋️ WOD : {wod} | 📍 Emplacement : {location}", ln=1)
+            pdf.ln(2)
+
+            for lane in sorted(lanes):
+                juge = lanes[lane]
+                pdf.cell(0, 6, f"Lane {lane} : {juge}", ln=1)
+
+            pdf.ln(6)
+
     return pdf
 
 def main():
