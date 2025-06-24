@@ -91,9 +91,9 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         pdf.add_page()
         
         # Configuration du tableau
-        col_width = 190  # Largeur totale de la page
+        col_width = 90
         row_height = 8
-        spacing = 10  # Espace entre les tableaux
+        spacing = 15
         
         for j in range(2):
             if i + j >= len(heats):
@@ -101,29 +101,32 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
             (start, end, wod, location), lanes = heats[i + j]
             
-            # Position Y pour le tableau
-            y_position = 15 + j * (5 * row_height + spacing)
+            # Position X pour le tableau (gauche ou droite)
+            x_position = 10 + j * (col_width + spacing)
             
             # En-tête du tableau
             pdf.set_font("Arial", 'B', 10)
-            pdf.set_xy(10, y_position)
+            pdf.set_xy(x_position, 15)
             pdf.cell(col_width, row_height, f"HEAT: {start} - {end}", border=1, align='C', fill=True)
             
             pdf.set_font("Arial", '', 9)
-            pdf.set_xy(10, y_position + row_height)
-            pdf.cell(col_width, row_height, f"WOD: {wod} | Location: {location}", border=1, align='C')
+            pdf.set_xy(x_position, 15 + row_height)
+            pdf.cell(col_width, row_height, f"WOD: {wod}", border=1, align='C')
+            
+            pdf.set_xy(x_position, 15 + 2*row_height)
+            pdf.cell(col_width, row_height, f"Location: {location}", border=1, align='C')
             
             # En-tête des colonnes
             pdf.set_font("Arial", 'B', 9)
-            pdf.set_xy(10, y_position + 2*row_height)
+            pdf.set_xy(x_position, 15 + 3*row_height)
             pdf.cell(col_width/2, row_height, "Lane", border=1, align='C', fill=True)
             pdf.cell(col_width/2, row_height, "Juge", border=1, align='C', fill=True)
             
             # Contenu du tableau
             pdf.set_font("Arial", '', 9)
             for k, lane in enumerate(sorted(lanes)):
-                current_y = y_position + (3 + k) * row_height
-                pdf.set_xy(10, current_y)
+                y_position = 15 + (4 + k) * row_height
+                pdf.set_xy(x_position, y_position)
                 pdf.cell(col_width/2, row_height, str(lane), border=1, align='C')
                 pdf.cell(col_width/2, row_height, lanes[lane], border=1, align='C')
 
