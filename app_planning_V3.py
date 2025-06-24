@@ -94,8 +94,9 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
             heat_map[key][int(c['lane'])] = juge
 
     pdf = FPDF()
+    pdf.add_font('DejaVu', '', 'DejaVuSansCondensed.ttf', uni=True)
     pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.set_font("Arial", '', 10)
+    pdf.set_font('DejaVu', '', 10)
 
     heats = list(heat_map.items())
     heats.sort(key=lambda x: x[0][0])
@@ -107,10 +108,10 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
                 break
 
             (start, end, wod, location), lanes = heats[i + j]
-            pdf.set_font("Arial", 'B', 12)
-            pdf.cell(0, 8, f"HEAT – {start} à {end}", ln=1)
-            pdf.set_font("Arial", '', 11)
-            pdf.cell(0, 6, f"WOD : {wod} | Emplacement : {location}", ln=1)
+            pdf.set_font('DejaVu', 'B', 12)
+            pdf.cell(0, 8, f"HEAT – {start} à {end}", ln=1)  # Now supports en dash
+            pdf.set_font('DejaVu', '', 11)
+            pdf.cell(0, 6, f"WOD : {wod} | 📍 Emplacement : {location}", ln=1)
             pdf.ln(2)
 
             for lane in sorted(lanes):
