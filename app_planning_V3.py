@@ -89,22 +89,43 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
     for i in range(0, len(heats), 2):
         pdf.add_page()
+        
+        # Configuration du tableau
+        col_width = 190  # Largeur totale de la page
+        row_height = 8
+        spacing = 10  # Espace entre les tableaux
+        
         for j in range(2):
             if i + j >= len(heats):
                 break
 
             (start, end, wod, location), lanes = heats[i + j]
-            pdf.set_font("Arial", 'B', 12)
-            pdf.cell(0, 8, f"HEAT - {start} a {end}", ln=1)
-            pdf.set_font("Arial", '', 11)
-            pdf.cell(0, 6, f"WOD: {wod} | Emplacement: {location}", ln=1)
-            pdf.ln(2)
-
-            for lane in sorted(lanes):
-                juge = lanes[lane]
-                pdf.cell(0, 6, f"Lane {lane}: {juge}", ln=1)
-
-            pdf.ln(6)
+            
+            # Position Y pour le tableau
+            y_position = 15 + j * (5 * row_height + spacing)
+            
+            # En-tête du tableau
+            pdf.set_font("Arial", 'B', 10)
+            pdf.set_xy(10, y_position)
+            pdf.cell(col_width, row_height, f"HEAT: {start} - {end}", border=1, align='C', fill=True)
+            
+            pdf.set_font("Arial", '', 9)
+            pdf.set_xy(10, y_position + row_height)
+            pdf.cell(col_width, row_height, f"WOD: {wod} | Location: {location}", border=1, align='C')
+            
+            # En-tête des colonnes
+            pdf.set_font("Arial", 'B', 9)
+            pdf.set_xy(10, y_position + 2*row_height)
+            pdf.cell(col_width/2, row_height, "Lane", border=1, align='C', fill=True)
+            pdf.cell(col_width/2, row_height, "Juge", border=1, align='C', fill=True)
+            
+            # Contenu du tableau
+            pdf.set_font("Arial", '', 9)
+            for k, lane in enumerate(sorted(lanes)):
+                current_y = y_position + (3 + k) * row_height
+                pdf.set_xy(10, current_y)
+                pdf.cell(col_width/2, row_height, str(lane), border=1, align='C')
+                pdf.cell(col_width/2, row_height, lanes[lane], border=1, align='C')
 
     return pdf
 
