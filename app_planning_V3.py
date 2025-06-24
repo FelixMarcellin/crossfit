@@ -4,6 +4,8 @@ Created on Tue Jun 24 10:46:15 2025
 
 @author: felima
 """
+
+
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
@@ -13,6 +15,7 @@ import os
 from datetime import datetime
 from typing import Dict, List
 from collections import defaultdict
+import traceback
 
 st.set_page_config(page_title="Planning Juges CrossFit", layout="wide")
 st.title("🧑‍⚖️ Gestion des Juges - Unicorn Throwdown 2025")
@@ -86,7 +89,6 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
 def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     print("✅ Appel de generate_heat_pdf() ✔️")
-
     heat_map = defaultdict(lambda: defaultdict(str))
 
     for juge, creneaux in planning.items():
@@ -131,8 +133,17 @@ def main():
     if schedule_file and judges_file:
         try:
             schedule = pd.read_excel(schedule_file, engine='openpyxl')
-            # ➕ Correction encodage ici :
             judges = pd.read_csv(judges_file, header=None, encoding='latin1')[0].dropna().tolist()
+
+            st.subheader("📄 Aperçu du planning importé")
+            st.dataframe(schedule.head())
+
+            required_columns = ['Workout', 'Lane', 'Competitor', 'Division', 'Workout Location', 'Heat Start Time', 'Heat End Time']
+            if not all(col in schedule.columns for col in required_columns):
+                st.error("❌ Erreur : Certaines colonnes attendues sont manquantes.")
+                st.write("Colonnes requises :", required_columns)
+                st.write("Colonnes trouvées :", list(schedule.columns))
+                return
 
             schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=True)]
             schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
@@ -140,7 +151,6 @@ def main():
 
             st.header("📝 Disponibilité des Juges par WOD")
             disponibilites = {wod: set() for wod in wods}
-
             cols = st.columns(3)
             for i, wod in enumerate(wods):
                 with cols[i % 3]:
@@ -153,15 +163,12 @@ def main():
 
             if st.button("✨ Générer les plannings"):
                 planning = {juge: [] for juge in judges}
-
                 for _, row in schedule.iterrows():
                     wod = row['Workout']
                     juges_dispo = disponibilites[wod]
-
                     if not juges_dispo:
                         st.error(f"Aucun juge disponible pour le {wod}!")
                         continue
-
                     juge_attribue = min(juges_dispo, key=lambda j: len(planning[j]))
                     planning[juge_attribue].append({
                         'wod': wod,
@@ -176,7 +183,6 @@ def main():
                 pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
                 pdf_heats = generate_heat_pdf({k: v for k, v in planning.items() if v})
 
-                # Téléchargement PDF juges
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_juges:
                     pdf_juges.output(tmp_juges.name)
                     with open(tmp_juges.name, "rb") as f:
@@ -188,7 +194,6 @@ def main():
                         )
                     os.unlink(tmp_juges.name)
 
-                # Téléchargement PDF heats
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_heats:
                     pdf_heats.output(tmp_heats.name)
                     with open(tmp_heats.name, "rb") as f:
@@ -208,9 +213,11 @@ def main():
                             st.table(pd.DataFrame(creneaux))
 
         except Exception as e:
-            st.error(f"Erreur lors du traitement: {str(e)}")
+            st.error("Erreur lors du traitement :")
+            st.code(traceback.format_exc())
     else:
         st.info("Veuillez uploader les fichiers pour commencer")
 
 if __name__ == "__main__":
     main()
+
