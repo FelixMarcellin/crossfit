@@ -90,10 +90,10 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     for i in range(0, len(heats), 2):
         pdf.add_page()
         
-        # Configuration des tableaux
-        col_width = 90  # Largeur des colonnes
-        line_height = 8  # Hauteur des lignes
-        spacing = 15    # Espace entre les tableaux
+        # Configuration du tableau
+        col_width = 190  # Largeur totale de la page
+        row_height = 8
+        spacing = 10  # Espace entre les tableaux
         
         for j in range(2):
             if i + j >= len(heats):
@@ -101,43 +101,31 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
             (start, end, wod, location), lanes = heats[i + j]
             
-            # Position Y pour le tableau (2 tableaux par page)
-            y_position = 20 + j * (50)  # Ajustez cette valeur selon l'espace nécessaire
-            
-            # En-tête du heat
-            pdf.set_font("Arial", 'B', 12)
-            pdf.set_xy(10, y_position)
-            pdf.cell(0, line_height, f"HEAT - {start} à {end}", ln=1)
-            
-            # Détails WOD et emplacement
-            pdf.set_font("Arial", '', 10)
-            pdf.set_xy(10, y_position + line_height)
-            pdf.cell(0, line_height, f"WOD: {wod} | Emplacement: {location}", ln=1)
-            
-            # Création du tableau
-            pdf.set_xy(10, y_position + 2*line_height)
+            # Position Y pour le tableau
+            y_position = 15 + j * (5 * row_height + spacing)
             
             # En-tête du tableau
-            pdf.set_fill_color(211, 211, 211)  # Gris clair pour l'en-tête
             pdf.set_font("Arial", 'B', 10)
-            pdf.cell(col_width, line_height, "Lane", border=1, align='C', fill=True)
-            pdf.cell(col_width, line_height, "Juge", border=1, align='C', fill=True)
-            pdf.ln()
+            pdf.set_xy(10, y_position)
+            pdf.cell(col_width, row_height, f"HEAT: {start} - {end}", border=1, align='C', fill=True)
+            
+            pdf.set_font("Arial", '', 9)
+            pdf.set_xy(10, y_position + row_height)
+            pdf.cell(col_width, row_height, f"WOD: {wod} | Location: {location}", border=1, align='C')
+            
+            # En-tête des colonnes
+            pdf.set_font("Arial", 'B', 9)
+            pdf.set_xy(10, y_position + 2*row_height)
+            pdf.cell(col_width/2, row_height, "Lane", border=1, align='C', fill=True)
+            pdf.cell(col_width/2, row_height, "Juge", border=1, align='C', fill=True)
             
             # Contenu du tableau
             pdf.set_font("Arial", '', 9)
-            fill = False  # Pour alterner les couleurs des lignes
-            
-            for lane in sorted(lanes.keys()):
-                pdf.set_x(10)
-                pdf.set_fill_color(240, 240, 240) if fill else pdf.set_fill_color(255, 255, 255)
-                pdf.cell(col_width, line_height, str(lane), border=1, align='C', fill=True)
-                pdf.cell(col_width, line_height, lanes[lane], border=1, align='C', fill=True)
-                pdf.ln()
-                fill = not fill
-            
-            # Espace entre les tableaux
-            pdf.ln(5)
+            for k, lane in enumerate(sorted(lanes)):
+                current_y = y_position + (3 + k) * row_height
+                pdf.set_xy(10, current_y)
+                pdf.cell(col_width/2, row_height, str(lane), border=1, align='C')
+                pdf.cell(col_width/2, row_height, lanes[lane], border=1, align='C')
 
     return pdf
 
