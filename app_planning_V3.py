@@ -6,7 +6,6 @@ Created on Tue Jun 24 14:48:50 2025
 """
 
 
-
 import streamlit as st
 import pandas as pd
 from fpdf import FPDF
@@ -151,45 +150,51 @@ def main():
             if judges_file:
                 judges = pd.read_csv(judges_file, header=None, encoding='latin1')[0].dropna().tolist()
         else:
+            # Version corrigée pour la saisie manuelle
             judges_text = st.text_area(
                 "Saisir les noms des juges (un par ligne)",
+                value="Juge 1\nJuge 2\nJuge 3",  # Valeur par défaut pour l'exemple
                 height=150,
                 help="Entrez un nom de juge par ligne"
             )
-            if judges_text:
-                judges = [j.strip() for j in judges_text.split('\n') if j.strip()]
+            judges = [j.strip() for j in judges_text.split('\n') if j.strip()]
+            
+            # Afficher un aperçu des juges saisis
+            if judges:
+                st.write("Juges saisis:")
+                st.write(judges)
 
     if schedule_file and judges:
         try:
             schedule = pd.read_excel(schedule_file, engine='openpyxl')
 
-            st.subheader("Apercu du planning importe")
+            st.subheader("Aperçu du planning importé")
             st.dataframe(schedule.head())
 
             required_columns = ['Workout', 'Lane', 'Competitor', 'Division', 'Workout Location', 'Heat Start Time', 'Heat End Time']
             if not all(col in schedule.columns for col in required_columns):
                 st.error("Erreur: Colonnes manquantes.")
                 st.write("Colonnes requises:", required_columns)
-                st.write("Colonnes trouvees:", list(schedule.columns))
+                st.write("Colonnes trouvées:", list(schedule.columns))
                 return
 
             schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
             schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
             wods = sorted(schedule['Workout'].unique())
 
-            st.header("Disponibilite des Juges par WOD")
+            st.header("Disponibilité des Juges par WOD")
             disponibilites = {wod: set() for wod in wods}
             cols = st.columns(3)
             for i, wod in enumerate(wods):
                 with cols[i % 3]:
                     with st.expander(f"WOD: {wod}"):
                         disponibilites[wod] = set(st.multiselect(
-                            f"Selection pour {wod}",
+                            f"Sélection pour {wod}",
                             judges,
                             key=f"dispo_{wod}"
                         ))
 
-            if st.button("Generer les plannings"):
+            if st.button("Générer les plannings"):
                 planning = {juge: [] for juge in judges}
                 for _, row in schedule.iterrows():
                     wod = row['Workout']
@@ -215,7 +220,7 @@ def main():
                     pdf_juges.output(tmp_juges.name)
                     with open(tmp_juges.name, "rb") as f:
                         st.download_button(
-                            "Telecharger planning par juge",
+                            "Télécharger planning par juge",
                             data=f,
                             file_name="planning_juges.pdf",
                             mime="application/pdf"
@@ -226,18 +231,18 @@ def main():
                     pdf_heats.output(tmp_heats.name)
                     with open(tmp_heats.name, "rb") as f:
                         st.download_button(
-                            "Telecharger planning par heat",
+                            "Télécharger planning par heat",
                             data=f,
                             file_name="planning_heats.pdf",
                             mime="application/pdf"
                         )
                     os.unlink(tmp_heats.name)
 
-                st.success("PDF generes avec succes!")
-                st.header("Recapitulatif des affectations")
+                st.success("PDF générés avec succès!")
+                st.header("Récapitulatif des affectations")
                 for juge, creneaux in planning.items():
                     if creneaux:
-                        with st.expander(f"Juge: {juge} ({len(creneaux)} creneaux)"):
+                        with st.expander(f"Juge: {juge} ({len(creneaux)} créneaux)"):
                             st.table(pd.DataFrame(creneaux))
 
         except Exception as e:
