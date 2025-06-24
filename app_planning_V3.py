@@ -16,8 +16,8 @@ from typing import Dict, List
 from collections import defaultdict
 import traceback
 
-st.set_page_config(page_title="Planning Juges by Crossfit Amiens 🦄 (c)Félix Marcellin", layout="wide")
-st.title("Planning Juges by Crossfit Amiens 🦄(c)Félix Marcellin")
+st.set_page_config(page_title="Planning Juges by Crossfit Amiens 🦄 (c)Felix Marcellin", layout="wide")
+st.title("Planning Juges by Crossfit Amiens 🦄(c)Felix Marcellin")
 
 def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     pdf = FPDF(orientation='P')
