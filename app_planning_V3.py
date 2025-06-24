@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Jun 24 10:46:15 2025
+Created on Tue Jun 24 14:48:50 2025
 
 @author: felima
 """
@@ -136,12 +136,32 @@ def main():
     with st.sidebar:
         st.header("Import des fichiers")
         schedule_file = st.file_uploader("Planning (Excel)", type=["xlsx"])
-        judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
+        
+        # Nouvelle section pour le choix de la méthode de saisie des juges
+        st.header("Saisie des juges")
+        input_method = st.radio(
+            "Méthode de saisie des juges",
+            options=["Fichier CSV", "Saisie manuelle"],
+            index=0
+        )
+        
+        judges = []
+        if input_method == "Fichier CSV":
+            judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
+            if judges_file:
+                judges = pd.read_csv(judges_file, header=None, encoding='latin1')[0].dropna().tolist()
+        else:
+            judges_text = st.text_area(
+                "Saisir les noms des juges (un par ligne)",
+                height=150,
+                help="Entrez un nom de juge par ligne"
+            )
+            if judges_text:
+                judges = [j.strip() for j in judges_text.split('\n') if j.strip()]
 
-    if schedule_file and judges_file:
+    if schedule_file and judges:
         try:
             schedule = pd.read_excel(schedule_file, engine='openpyxl')
-            judges = pd.read_csv(judges_file, header=None, encoding='latin1')[0].dropna().tolist()
 
             st.subheader("Apercu du planning importe")
             st.dataframe(schedule.head())
@@ -224,9 +244,7 @@ def main():
             st.error("Erreur lors du traitement:")
             st.code(traceback.format_exc())
     else:
-        st.info("Veuillez uploader les fichiers pour commencer")
+        st.info("Veuillez uploader le fichier de planning et saisir les juges pour commencer")
 
 if __name__ == "__main__":
     main()
-
-
