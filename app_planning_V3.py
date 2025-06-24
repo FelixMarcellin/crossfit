@@ -29,7 +29,7 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
         pdf.add_page()
         pdf.set_font("Arial", 'B', 16)
-        pdf.cell(0, 10, "Unicorn Throwdown 2025", 0, 1, 'C')
+        pdf.cell(0, 10, "Nom de la compétition", 0, 1, 'C')
         pdf.set_font("Arial", 'B', 14)
         pdf.cell(0, 10, f"Planning: {juge}", 0, 1, 'C')
         pdf.ln(10)
