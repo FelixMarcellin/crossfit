@@ -108,9 +108,9 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
             (start, end, wod, location), lanes = heats[i + j]
             pdf.set_font("Arial", 'B', 12)
-            pdf.cell(0, 8, f"📆 HEAT – {start} à {end}", ln=1)
+            pdf.cell(0, 8, f"HEAT – {start} à {end}", ln=1)
             pdf.set_font("Arial", '', 11)
-            pdf.cell(0, 6, f"🏋️ WOD : {wod} | 📍 Emplacement : {location}", ln=1)
+            pdf.cell(0, 6, f"WOD : {wod} | 📍 Emplacement : {location}", ln=1)
             pdf.ln(2)
 
             for lane in sorted(lanes):
