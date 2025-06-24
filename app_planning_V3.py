@@ -5,7 +5,6 @@ Created on Tue Jun 24 10:46:15 2025
 @author: felima
 """
 
-
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
@@ -18,7 +17,7 @@ from collections import defaultdict
 import traceback
 
 st.set_page_config(page_title="Planning Juges CrossFit", layout="wide")
-st.title("🧑‍⚖️ Gestion des Juges - Unicorn Throwdown 2025")
+st.title("🧑‍⚖️ Planning des Juges - Unicorn Throwdown ")
 
 def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     print("✅ Appel de generate_pdf_tableau() ✔️")
@@ -51,10 +50,8 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
         for i, c in enumerate(creneaux):
             pdf.set_fill_color(*row_colors[i % 2])
-            start = c['start']
-            end = c['end']
-            start_time = start if isinstance(start, str) else start.strftime('%H:%M')
-            end_time = end if isinstance(end, str) else end.strftime('%H:%M')
+            start_time = c['start'] if isinstance(c['start'], str) else c['start'].strftime('%H:%M')
+            end_time = c['end'] if isinstance(c['end'], str) else c['end'].strftime('%H:%M')
 
             data = [
                 f"{start_time} - {end_time}",
@@ -67,7 +64,7 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
             heights = []
             for value, width in zip(data, col_widths):
-                lines = FPDF().multi_cell(width, 5, str(value), border=0, align='C', split_only=True)
+                lines = pdf.multi_cell(width, 5, str(value), border=0, align='C', split_only=True)
                 heights.append(len(lines) * 5)
             max_height = max(heights)
 
@@ -220,4 +217,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
