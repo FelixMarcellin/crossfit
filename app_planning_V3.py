@@ -1,10 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Jun 24 14:48:50 2025
+Created on Sun Oct 12 15:24:22 2025
 
 @author: felima
 """
 
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Jun 24 14:48:50 2025
+
+@author: felima
+"""
 
 import streamlit as st
 import pandas as pd
@@ -18,6 +24,10 @@ import traceback
 st.set_page_config(page_title="Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin", layout="wide")
 st.title("Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin")
 
+
+# ---------------------------------------------------------------------------
+# 🧾 Génération du PDF par juge
+# ---------------------------------------------------------------------------
 def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     pdf = FPDF(orientation='P')
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -66,10 +76,14 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         pdf.ln(10)
         pdf.set_font("Arial", 'I', 10)
         total_wods = len({c['wod'] for c in creneaux})
-        pdf.cell(0, 8, f"Total: {len(creneaux)} creneaux sur {total_wods} WODs", 0, 1)
+        pdf.cell(0, 8, f"Total: {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
 
+
+# ---------------------------------------------------------------------------
+# 🔥 Génération du PDF par HEAT
+# ---------------------------------------------------------------------------
 def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     heat_map = defaultdict(lambda: defaultdict(str))
 
@@ -88,78 +102,72 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
     for i in range(0, len(heats), 2):
         pdf.add_page()
-        
-        # Configuration du tableau
         col_width = 90
         row_height = 8
         spacing = 15
-        
+
         for j in range(2):
             if i + j >= len(heats):
                 break
 
             (start, end, wod, location), lanes = heats[i + j]
-            
-            # Position X pour le tableau (gauche ou droite)
             x_position = 10 + j * (col_width + spacing)
-            
-            # En-tête du tableau
+
             pdf.set_font("Arial", 'B', 10)
             pdf.set_xy(x_position, 15)
             pdf.cell(col_width, row_height, f"HEAT: {start} - {end}", border=1, align='C', fill=True)
-            
+
             pdf.set_font("Arial", '', 9)
             pdf.set_xy(x_position, 15 + row_height)
             pdf.cell(col_width, row_height, f"WOD: {wod}", border=1, align='C')
-            
-            pdf.set_xy(x_position, 15 + 2*row_height)
+
+            pdf.set_xy(x_position, 15 + 2 * row_height)
             pdf.cell(col_width, row_height, f"Location: {location}", border=1, align='C')
-            
-            # En-tête des colonnes
+
             pdf.set_font("Arial", 'B', 9)
-            pdf.set_xy(x_position, 15 + 3*row_height)
-            pdf.cell(col_width/2, row_height, "Lane", border=1, align='C', fill=True)
-            pdf.cell(col_width/2, row_height, "Juge", border=1, align='C', fill=True)
-            
-            # Contenu du tableau
+            pdf.set_xy(x_position, 15 + 3 * row_height)
+            pdf.cell(col_width / 2, row_height, "Lane", border=1, align='C', fill=True)
+            pdf.cell(col_width / 2, row_height, "Juge", border=1, align='C', fill=True)
+
             pdf.set_font("Arial", '', 9)
             for k, lane in enumerate(sorted(lanes)):
                 y_position = 15 + (4 + k) * row_height
                 pdf.set_xy(x_position, y_position)
-                pdf.cell(col_width/2, row_height, str(lane), border=1, align='C')
-                pdf.cell(col_width/2, row_height, lanes[lane], border=1, align='C')
+                pdf.cell(col_width / 2, row_height, str(lane), border=1, align='C')
+                pdf.cell(col_width / 2, row_height, lanes[lane], border=1, align='C')
 
     return pdf
 
+
+# ---------------------------------------------------------------------------
+# 🚀 Application principale Streamlit
+# ---------------------------------------------------------------------------
 def main():
     with st.sidebar:
         st.header("Import des fichiers")
         schedule_file = st.file_uploader("Planning (Excel)", type=["xlsx"])
-        
-        # Nouvelle section pour le choix de la méthode de saisie des juges
+
         st.header("Saisie des juges")
         input_method = st.radio(
             "Méthode de saisie des juges",
             options=["Fichier CSV", "Saisie manuelle"],
             index=0
         )
-        
+
         judges = []
         if input_method == "Fichier CSV":
             judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
             if judges_file:
                 judges = pd.read_csv(judges_file, header=None, encoding='latin1')[0].dropna().tolist()
         else:
-            # Version corrigée pour la saisie manuelle
             judges_text = st.text_area(
                 "Saisir les noms des juges (un par ligne)",
-                value="Juge 1\nJuge 2\nJuge 3",  # Valeur par défaut pour l'exemple
+                value="Juge 1\nJuge 2\nJuge 3",
                 height=150,
                 help="Entrez un nom de juge par ligne"
             )
             judges = [j.strip() for j in judges_text.split('\n') if j.strip()]
-            
-            # Afficher un aperçu des juges saisis
+
             if judges:
                 st.write("Juges saisis:")
                 st.write(judges)
@@ -167,7 +175,6 @@ def main():
     if schedule_file and judges:
         try:
             schedule = pd.read_excel(schedule_file, engine='openpyxl')
-
             st.subheader("Aperçu du planning importé")
             st.dataframe(schedule.head())
 
@@ -194,24 +201,38 @@ def main():
                             key=f"dispo_{wod}"
                         ))
 
+            # 🆕 Nouvelle option : rotation des juges
+            rotation_freq = st.selectbox(
+                "Changer de juge tous les ... heats",
+                options=[1, 2],
+                index=0,
+                help="1 = changement à chaque heat, 2 = tous les 2 heats"
+            )
+
             if st.button("Générer les plannings"):
                 planning = {juge: [] for juge in judges}
-                for _, row in schedule.iterrows():
-                    wod = row['Workout']
-                    juges_dispo = disponibilites[wod]
+                grouped = schedule.groupby(['Workout', 'Heat Start Time', 'Heat End Time', 'Workout Location'])
+                all_groups = list(grouped.groups.keys())
+
+                for idx, (wod, start, end, location) in enumerate(all_groups):
+                    juges_dispo = list(disponibilites[wod])
                     if not juges_dispo:
                         st.error(f"Aucun juge pour {wod}!")
                         continue
-                    juge_attribue = min(juges_dispo, key=lambda j: len(planning[j]))
-                    planning[juge_attribue].append({
-                        'wod': wod,
-                        'lane': row['Lane'],
-                        'athlete': row['Competitor'],
-                        'division': row['Division'],
-                        'location': row['Workout Location'],
-                        'start': row['Heat Start Time'],
-                        'end': row['Heat End Time']
-                    })
+
+                    juge_index = (idx // rotation_freq) % len(juges_dispo)
+                    juge_attribue = juges_dispo[juge_index]
+
+                    for _, row in grouped.get_group((wod, start, end, location)).iterrows():
+                        planning[juge_attribue].append({
+                            'wod': wod,
+                            'lane': row['Lane'],
+                            'athlete': row['Competitor'],
+                            'division': row['Division'],
+                            'location': location,
+                            'start': start,
+                            'end': end
+                        })
 
                 pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
                 pdf_heats = generate_heat_pdf({k: v for k, v in planning.items() if v})
@@ -250,6 +271,7 @@ def main():
             st.code(traceback.format_exc())
     else:
         st.info("Veuillez uploader le fichier de planning et saisir les juges pour commencer")
+
 
 if __name__ == "__main__":
     main()
