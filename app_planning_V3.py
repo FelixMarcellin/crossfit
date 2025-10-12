@@ -16,8 +16,7 @@ import traceback
 st.set_page_config(page_title="Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin", layout="wide")
 st.title("Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin")
 
-
-# ---------------------------- PDF GÉNÉRATION ---------------------------- #
+# ---------------------------- PDF FUNCTIONS ---------------------------- #
 
 def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     pdf = FPDF(orientation='P')
@@ -71,7 +70,6 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
     return pdf
 
-
 def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     heat_map = defaultdict(lambda: defaultdict(str))
 
@@ -86,7 +84,7 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.set_font("Arial", '', 10)
 
-    heats = sorted(heat_map.items(), key=lambda x: (x[0][0], x[0][1]))  # tri par WOD puis Heat #
+    heats = sorted(heat_map.items(), key=lambda x: (x[0][0], x[0][1]))
 
     for i in range(0, len(heats), 2):
         pdf.add_page()
@@ -126,57 +124,46 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
     return pdf
 
-
 # ---------------------------- MAIN APP ---------------------------- #
 
 def main():
     with st.sidebar:
         st.header("Import des fichiers")
         schedule_file = st.file_uploader("Planning (Excel)", type=["xlsx"])
-
+        
         st.header("Saisie des juges")
         input_method = st.radio("Méthode de saisie des juges", options=["Fichier CSV", "Saisie manuelle"], index=0)
-
+        
         judges = []
         if input_method == "Fichier CSV":
             judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
             if judges_file:
                 judges = pd.read_csv(judges_file, header=None, encoding='latin1')[0].dropna().tolist()
         else:
-            judges_text = st.text_area(
-                "Saisir les noms des juges (un par ligne)",
-                value="Juge 1\nJuge 2\nJuge 3",
-                height=150
-            )
+            judges_text = st.text_area("Saisir les noms des juges (un par ligne)", value="Juge 1\nJuge 2\nJuge 3", height=150)
             judges = [j.strip() for j in judges_text.split('\n') if j.strip()]
+        
+        st.header("Rotation des juges")
+        rotation_heats = st.selectbox("Nombre de heats consécutifs par juge", options=[1,2], index=0)
 
     if schedule_file and judges:
         try:
             schedule = pd.read_excel(schedule_file, engine='openpyxl')
-
             st.subheader("Aperçu du planning importé")
             st.dataframe(schedule.head())
 
-            required_columns = [
-                'Workout', 'Heat #', 'Lane', 'Competitor', 'Division',
-                'Workout Location', 'Heat Start Time', 'Heat End Time'
-            ]
+            required_columns = ['Workout', 'Heat #', 'Lane', 'Competitor', 'Division', 'Workout Location', 'Heat Start Time', 'Heat End Time']
             if not all(col in schedule.columns for col in required_columns):
-                st.error("Erreur: Colonnes manquantes.")
-                st.write("Colonnes requises:", required_columns)
-                st.write("Colonnes trouvées:", list(schedule.columns))
+                st.error("Colonnes manquantes.")
                 return
 
             schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
             schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
             wods = sorted(schedule['Workout'].unique())
 
-            # Sélection des juges et rotation par WOD
             st.header("Disponibilité des Juges par WOD")
             disponibilites = {}
-            rotations = {}
             cols = st.columns(3)
-
             for i, wod in enumerate(wods):
                 with cols[i % 3]:
                     with st.expander(f"WOD: {wod}"):
@@ -184,94 +171,67 @@ def main():
                         if select_all:
                             selected_judges = judges
                         else:
-                            selected_judges = st.multiselect(
-                                f"Sélection des juges pour {wod}",
-                                judges,
-                                key=f"dispo_{wod}"
-                            )
-                        disponibilites[wod] = set(selected_judges)
-
-                        # Rotation spécifique à ce WOD
-                        rotations[wod] = st.selectbox(
-                            f"Changer de juge tous les ... heats ({wod})",
-                            options=[1, 2],
-                            index=0,
-                            key=f"rotation_{wod}"
-                        )
+                            selected_judges = st.multiselect(f"Sélection pour {wod}", judges, key=f"dispo_{wod}")
+                        disponibilites[wod] = list(selected_judges)
 
             if st.button("Générer les plannings"):
-                planning = {juge: [] for juge in judges}
+                planning = {j: [] for j in judges}
 
                 for wod in wods:
-                    juges_dispo = list(disponibilites[wod])
-                    if not juges_dispo:
-                        st.error(f"Aucun juge sélectionné pour le WOD {wod}!")
+                    data_wod = schedule[schedule['Workout'] == wod].sort_values(['Heat #','Lane'])
+                    heats = sorted(data_wod['Heat #'].unique())
+                    juge_order = disponibilites[wod]
+                    if not juge_order:
+                        st.error(f"Aucun juge sélectionné pour {wod}")
                         continue
+                    heat_idx = 0
+                    while heat_idx < len(heats):
+                        for juge in juge_order:
+                            for r in range(rotation_heats):
+                                if heat_idx+r >= len(heats):
+                                    break
+                                heat_num = heats[heat_idx + r]
+                                lines = data_wod[data_wod['Heat #'] == heat_num]
+                                for _, row in lines.iterrows():
+                                    planning[juge].append({
+                                        'wod': wod,
+                                        'heat': heat_num,
+                                        'lane': row['Lane'],
+                                        'athlete': row['Competitor'],
+                                        'division': row['Division'],
+                                        'location': row['Workout Location'],
+                                        'start': row['Heat Start Time'],
+                                        'end': row['Heat End Time']
+                                    })
+                        heat_idx += rotation_heats * len(juge_order)
 
-                    rotation_freq = rotations[wod]
-                    wod_data = schedule[schedule['Workout'] == wod].copy()
-                    wod_data = wod_data.sort_values(by=['Heat #', 'Lane'])
-
-                    heat_nums = sorted(wod_data['Heat #'].unique())
-                    juge_index = 0
-
-                    for i, heat_num in enumerate(heat_nums):
-                        if i % rotation_freq == 0 and i != 0:
-                            juge_index = (juge_index + 1) % len(juges_dispo)
-
-                        juge_attribue = juges_dispo[juge_index]
-                        heat_rows = wod_data[wod_data['Heat #'] == heat_num]
-
-                        for _, row in heat_rows.iterrows():
-                            planning[juge_attribue].append({
-                                'wod': wod,
-                                'heat': heat_num,
-                                'lane': row['Lane'],
-                                'athlete': row['Competitor'],
-                                'division': row['Division'],
-                                'location': row['Workout Location'],
-                                'start': row['Heat Start Time'],
-                                'end': row['Heat End Time']
-                            })
-
-                pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
-                pdf_heats = generate_heat_pdf({k: v for k, v in planning.items() if v})
+                pdf_juges = generate_pdf_tableau({k:v for k,v in planning.items() if v})
+                pdf_heats = generate_heat_pdf({k:v for k,v in planning.items() if v})
 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_juges:
                     pdf_juges.output(tmp_juges.name)
-                    with open(tmp_juges.name, "rb") as f:
-                        st.download_button(
-                            "Télécharger planning par juge",
-                            data=f,
-                            file_name="planning_juges.pdf",
-                            mime="application/pdf"
-                        )
+                    with open(tmp_juges.name,"rb") as f:
+                        st.download_button("Télécharger planning par juge", f, "planning_juges.pdf", "application/pdf")
                     os.unlink(tmp_juges.name)
 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_heats:
                     pdf_heats.output(tmp_heats.name)
-                    with open(tmp_heats.name, "rb") as f:
-                        st.download_button(
-                            "Télécharger planning par heat",
-                            data=f,
-                            file_name="planning_heats.pdf",
-                            mime="application/pdf"
-                        )
+                    with open(tmp_heats.name,"rb") as f:
+                        st.download_button("Télécharger planning par heat", f, "planning_heats.pdf", "application/pdf")
                     os.unlink(tmp_heats.name)
 
                 st.success("PDF générés avec succès!")
                 st.header("Récapitulatif des affectations")
                 for juge, creneaux in planning.items():
                     if creneaux:
-                        with st.expander(f"Juge: {juge} ({len(creneaux)} créneaux)"):
+                        with st.expander(f"{juge} ({len(creneaux)} créneaux)"):
                             st.table(pd.DataFrame(creneaux))
 
         except Exception:
             st.error("Erreur lors du traitement:")
             st.code(traceback.format_exc())
     else:
-        st.info("Veuillez uploader le fichier de planning et saisir les juges pour commencer.")
-
+        st.info("Uploader le fichier et saisir les juges pour commencer.")
 
 if __name__ == "__main__":
     main()
