@@ -178,14 +178,14 @@ def main():
                 st.write("Juges saisis:")
                 st.write(judges)
         
-        # Paramètre pour le nombre de heats consécutifs
+        # Paramètre pour le nombre de lanes consécutives par juge
         st.header("Paramètres d'affectation")
-        heats_consecutifs = st.number_input(
-            "Nombre de heats consécutifs par juge avant rotation",
+        lanes_par_juge = st.number_input(
+            "Nombre de lanes consécutives par juge",
             min_value=1,
             max_value=10,
-            value=2,
-            help="Chaque juge jugera ce nombre de heats consécutifs avant de passer au juge suivant"
+            value=1,
+            help="Chaque juge jugera ce nombre de lanes consécutives avant de passer au juge suivant"
         )
 
     if schedule_file and judges:
@@ -270,17 +270,20 @@ def main():
                     # Grouper par heat
                     heats = wod_schedule.groupby('Heat_Number')
                     
-                    juge_index = 0
-                    heat_count = 0
-                    
                     for heat_num, heat_data in heats:
-                        # Attribuer le même juge pour X heats consécutifs
-                        juge_attribue = juges_dispo[juge_index]
+                        # Trier les lanes dans l'ordre
+                        heat_data = heat_data.sort_values('Lane')
+                        
+                        juge_index = 0
+                        lane_count = 0
                         
                         for _, row in heat_data.iterrows():
+                            # Attribuer un juge pour cette lane
+                            juge_attribue = juges_dispo[juge_index]
+                            
                             planning[juge_attribue].append({
                                 'wod': wod,
-                                'heat': int(heat_num),  # Utiliser le numéro extrait
+                                'heat': int(heat_num),
                                 'lane': row['Lane'],
                                 'athlete': row['Competitor'],
                                 'division': row['Division'],
@@ -288,13 +291,13 @@ def main():
                                 'start': row['Heat Start Time'],
                                 'end': row['Heat End Time']
                             })
-                        
-                        heat_count += 1
-                        
-                        # Changer de juge après X heats consécutifs
-                        if heat_count >= heats_consecutifs:
-                            juge_index = (juge_index + 1) % len(juges_dispo)
-                            heat_count = 0
+                            
+                            lane_count += 1
+                            
+                            # Changer de juge après X lanes consécutives
+                            if lane_count >= lanes_par_juge:
+                                juge_index = (juge_index + 1) % len(juges_dispo)
+                                lane_count = 0
 
                 # Génération des PDF
                 pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
