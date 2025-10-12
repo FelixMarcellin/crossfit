@@ -193,4 +193,125 @@ def main():
             st.dataframe(schedule.head())
 
             required_columns = ['Workout', 'Lane', 'Competitor', 'Division', 'Workout Location', 'Heat Start Time', 'Heat End Time']
-            if not
+            if not all(col in schedule.columns for col in required_columns):
+                st.error("Erreur: Colonnes manquantes.")
+                st.write("Colonnes requises:", required_columns)
+                st.write("Colonnes trouvées:", list(schedule.columns))
+                return
+
+            # Filtrage des lignes vides
+            schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
+            schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
+            wods = sorted(schedule['Workout'].unique())
+
+            st.header("Disponibilité des Juges par WOD")
+            disponibilites = {wod: set() for wod in wods}
+            cols = st.columns(3)
+            for i, wod in enumerate(wods):
+                with cols[i % 3]:
+                    with st.expander(f"WOD: {wod}"):
+                        disponibilites[wod] = set(st.multiselect(
+                            f"Sélection pour {wod}",
+                            judges,
+                            key=f"dispo_{wod}"
+                        ))
+
+            # 🆕 Nouvelle option : rotation des juges
+            rotation_freq = st.selectbox(
+                "Changer de juge tous les ... heats",
+                options=[1, 2],
+                index=0,
+                help="1 = changement à chaque heat, 2 = tous les 2 heats"
+            )
+
+            if st.button("Générer les plannings"):
+                planning = {juge: [] for juge in judges}
+                grouped = schedule.groupby(['Workout', 'Heat Start Time', 'Heat End Time', 'Workout Location'])
+                all_groups = list(grouped.groups.keys())
+
+                # On parcourt les heats par ordre (indexable)
+                for idx, (wod, start, end, location) in enumerate(all_groups):
+                    juges_dispo = list(disponibilites[wod])
+                    if not juges_dispo:
+                        st.error(f"Aucun juge pour {wod}!")
+                        continue
+
+                    # point de départ dans la rotation
+                    start_pos = (idx // rotation_freq) % len(juges_dispo)
+
+                    # on cherche le premier juge sans conflit de temps
+                    assigned = False
+                    for offset in range(len(juges_dispo)):
+                        candidate = juges_dispo[(start_pos + offset) % len(juges_dispo)]
+                        # vérifier si candidate a un créneau qui chevauche [start, end)
+                        has_conflict = False
+                        for existing in planning[candidate]:
+                            if overlaps(existing['start'], existing['end'], start, end):
+                                has_conflict = True
+                                break
+                        if not has_conflict:
+                            # on l'affecte
+                            for _, row in grouped.get_group((wod, start, end, location)).iterrows():
+                                planning[candidate].append({
+                                    'wod': wod,
+                                    'lane': row['Lane'],
+                                    'athlete': row['Competitor'],
+                                    'division': row['Division'],
+                                    'location': location,
+                                    'start': start,
+                                    'end': end
+                                })
+                            assigned = True
+                            break
+
+                    if not assigned:
+                        # Aucun juge disponible sans conflit — on signale l'erreur pour intervention manuelle
+                        st.error(
+                            f"Impossible d'affecter un juge pour le heat {wod} {start} - {end} (location: {location}). "
+                            "Tous les juges disponibles pour ce WOD ont déjà un créneau qui chevauche cet horaire."
+                        )
+                        # on saute ce heat pour éviter double-affectation
+                        continue
+
+                # génération des PDFs comme avant (seulement pour les juges ayant des créneaux)
+                pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
+                pdf_heats = generate_heat_pdf({k: v for k, v in planning.items() if v})
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_juges:
+                    pdf_juges.output(tmp_juges.name)
+                    with open(tmp_juges.name, "rb") as f:
+                        st.download_button(
+                            "Télécharger planning par juge",
+                            data=f,
+                            file_name="planning_juges.pdf",
+                            mime="application/pdf"
+                        )
+                    os.unlink(tmp_juges.name)
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_heats:
+                    pdf_heats.output(tmp_heats.name)
+                    with open(tmp_heats.name, "rb") as f:
+                        st.download_button(
+                            "Télécharger planning par heat",
+                            data=f,
+                            file_name="planning_heats.pdf",
+                            mime="application/pdf"
+                        )
+                    os.unlink(tmp_heats.name)
+
+                st.success("PDF générés avec succès!")
+                st.header("Récapitulatif des affectations")
+                for juge, creneaux in planning.items():
+                    if creneaux:
+                        with st.expander(f"Juge: {juge} ({len(creneaux)} créneaux)"):
+                            st.table(pd.DataFrame(creneaux))
+
+        except Exception as e:
+            st.error("Erreur lors du traitement:")
+            st.code(traceback.format_exc())
+    else:
+        st.info("Veuillez uploader le fichier de planning et saisir les juges pour commencer")
+
+
+if __name__ == "__main__":
+    main()
