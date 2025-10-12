@@ -14,6 +14,7 @@ from typing import Dict, List
 from collections import defaultdict
 import traceback
 import re
+from datetime import datetime
 
 st.set_page_config(page_title="Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin", layout="wide")
 st.title("Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin")
@@ -30,6 +31,10 @@ def extract_heat_number(heat_value):
     if numbers:
         return int(numbers[0])
     return 0
+
+def time_overlap(start1, end1, start2, end2):
+    """Vérifie si deux créneaux horaires se chevauchent"""
+    return not (end1 <= start2 or end2 <= start1)
 
 def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     pdf = FPDF(orientation='P')
@@ -145,6 +150,35 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
     return pdf
 
+def is_juge_available(juge, creneau, planning, schedule):
+    """Vérifie si un juge est disponible pour un créneau donné"""
+    if juge not in planning:
+        return True
+    
+    new_start = creneau['start']
+    new_end = creneau['end']
+    
+    for existing_creneau in planning[juge]:
+        existing_start = existing_creneau['start']
+        existing_end = existing_creneau['end']
+        
+        # Vérifier le chevauchement horaire
+        if time_overlap(new_start, new_end, existing_start, existing_end):
+            return False
+    
+    return True
+
+def find_available_juge(creneau, juges_dispo, planning, schedule, juge_counts):
+    """Trouve un juge disponible pour un créneau donné"""
+    # Trier les juges par nombre d'attributions (le moins chargé en premier)
+    juges_tries = sorted(juges_dispo, key=lambda j: juge_counts.get(j, 0))
+    
+    for juge in juges_tries:
+        if is_juge_available(juge, creneau, planning, schedule):
+            return juge
+    
+    return None
+
 def main():
     with st.sidebar:
         st.header("Import des fichiers")
@@ -243,6 +277,7 @@ def main():
 
             if st.button("Générer les plannings"):
                 planning = {juge: [] for juge in judges}
+                juge_counts = {juge: 0 for juge in judges}
                 
                 # Compter le nombre total de créneaux par WOD
                 total_creneaux_par_wod = {}
@@ -258,7 +293,7 @@ def main():
                         reste = total_creneaux_par_wod[wod] % len(juges_dispo)
                         st.write(f"{wod}: {creneaux_par_juge} créneaux/juge + {reste} créneaux supplémentaires")
                 
-                # Traitement par WOD avec répartition équitable
+                # Traitement par WOD avec vérification des conflits horaires
                 for wod in wods:
                     juges_dispo = list(st.session_state.disponibilites[wod])
                     if not juges_dispo:
@@ -271,30 +306,9 @@ def main():
                     # Trier par heat et lane pour assurer l'ordre chronologique
                     wod_schedule = wod_schedule.sort_values(['Heat_Number', 'Lane'])
                     
-                    # Calculer la répartition équitable
-                    total_creneaux = len(wod_schedule)
-                    creneaux_par_juge = total_creneaux // len(juges_dispo)
-                    reste = total_creneaux % len(juges_dispo)
-                    
-                    # Créer une liste de juges avec le nombre de créneaux cible pour chacun
-                    repartition_juges = []
-                    for i, juge in enumerate(juges_dispo):
-                        count = creneaux_par_juge + (1 if i < reste else 0)
-                        repartition_juges.extend([juge] * count)
-                    
-                    # Mélanger pour éviter les patterns
-                    import random
-                    random.shuffle(repartition_juges)
-                    
-                    # Attribuer les créneaux
-                    for idx, (_, row) in enumerate(wod_schedule.iterrows()):
-                        if idx < len(repartition_juges):
-                            juge_attribue = repartition_juges[idx]
-                        else:
-                            # Si plus de créneaux que prévu, répartir équitablement
-                            juge_attribue = juges_dispo[idx % len(juges_dispo)]
-                        
-                        planning[juge_attribue].append({
+                    # Traiter les créneaux dans l'ordre chronologique
+                    for _, row in wod_schedule.iterrows():
+                        creneau = {
                             'wod': wod,
                             'heat': int(row['Heat_Number']),
                             'lane': row['Lane'],
@@ -303,7 +317,31 @@ def main():
                             'location': row['Workout Location'],
                             'start': row['Heat Start Time'],
                             'end': row['Heat End Time']
-                        })
+                        }
+                        
+                        # Trouver un juge disponible pour ce créneau
+                        juge_attribue = find_available_juge(creneau, juges_dispo, planning, schedule, juge_counts)
+                        
+                        if juge_attribue:
+                            planning[juge_attribue].append(creneau)
+                            juge_counts[juge_attribue] += 1
+                        else:
+                            st.warning(f"Aucun juge disponible pour le créneau {creneau['start']}-{creneau['end']} (WOD {wod}, Lane {creneau['lane']})")
+
+                # Vérifier les conflits horaires
+                st.subheader("Vérification des conflits horaires")
+                conflicts_found = False
+                for juge, creneaux in planning.items():
+                    creneaux_sorted = sorted(creneaux, key=lambda x: x['start'])
+                    for i in range(len(creneaux_sorted) - 1):
+                        current = creneaux_sorted[i]
+                        next_creneau = creneaux_sorted[i + 1]
+                        if time_overlap(current['start'], current['end'], next_creneau['start'], next_creneau['end']):
+                            st.error(f"CONFLIT: {juge} a des créneaux qui se chevauchent: {current['start']}-{current['end']} et {next_creneau['start']}-{next_creneau['end']}")
+                            conflicts_found = True
+                
+                if not conflicts_found:
+                    st.success("✅ Aucun conflit horaire détecté")
 
                 # Génération des PDF
                 pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
