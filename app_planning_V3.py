@@ -194,13 +194,17 @@ def main():
             wods = sorted(schedule['Workout'].unique())
 
             st.header("Disponibilité des Juges par WOD")
-            disponibilites = {wod: set() for wod in wods}
+            
+            # Initialisation de l'état de sélection
+            if 'disponibilites' not in st.session_state:
+                st.session_state.disponibilites = {wod: set() for wod in wods}
             
             # Bouton pour sélectionner tous les juges pour tous les WODs
             if st.button("Sélectionner tous les juges pour tous les WODs"):
                 for wod in wods:
-                    disponibilites[wod] = set(judges)
+                    st.session_state.disponibilites[wod] = set(judges)
                 st.success("Tous les juges sélectionnés pour tous les WODs!")
+                st.rerun()
             
             cols = st.columns(3)
             for i, wod in enumerate(wods):
@@ -208,22 +212,29 @@ def main():
                     with st.expander(f"WOD: {wod}"):
                         # Bouton pour sélectionner tous les juges pour ce WOD spécifique
                         if st.button(f"Tous pour {wod}", key=f"all_{wod}"):
-                            disponibilites[wod] = set(judges)
+                            st.session_state.disponibilites[wod] = set(judges)
                             st.rerun()
                         
-                        disponibilites[wod] = set(st.multiselect(
+                        # Récupérer la sélection actuelle depuis session_state
+                        current_selection = list(st.session_state.disponibilites[wod])
+                        
+                        # Widget multiselect
+                        selected_judges = st.multiselect(
                             f"Sélection pour {wod}",
                             judges,
-                            default=list(disponibilites[wod]),
+                            default=current_selection,
                             key=f"dispo_{wod}"
-                        ))
+                        )
+                        
+                        # Mettre à jour session_state
+                        st.session_state.disponibilites[wod] = set(selected_judges)
 
             if st.button("Générer les plannings"):
                 planning = {juge: [] for juge in judges}
                 
                 # Traitement par WOD
                 for wod in wods:
-                    juges_dispo = list(disponibilites[wod])
+                    juges_dispo = list(st.session_state.disponibilites[wod])
                     if not juges_dispo:
                         st.error(f"Aucun juge pour {wod}!")
                         continue
