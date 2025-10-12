@@ -131,29 +131,52 @@ def main():
 
             if st.button("Générer planning"):
                 planning = {j:[] for j in judges}
+                
                 for wod in wods:
                     data_wod = schedule[schedule['Workout']==wod].sort_values(['Heat #','Lane'])
                     heats = sorted(data_wod['Heat #'].unique())
                     available_judges = disponibilites[wod]
-                    if not available_judges: st.error(f"Aucun juge pour {wod}"); continue
-                    heat_idx=0
-                    while heat_idx<len(heats):
-                        for i,j in enumerate(available_judges):
-                            for r in range(rotation_heats):
-                                if heat_idx+r>=len(heats): break
-                                heat_num = heats[heat_idx+r]
-                                lines = data_wod[data_wod['Heat #']==heat_num]
-                                # Assigner un juge différent pour chaque ligne
-                                judge_idx=0
-                                for _, row in lines.iterrows():
-                                    planning[available_judges[judge_idx%len(available_judges)]].append({
-                                        'wod':wod,'heat':heat_num,'lane':row['Lane'],
-                                        'athlete':row['Competitor'],'division':row['Division'],
-                                        'location':row['Workout Location'],'start':row['Heat Start Time'],'end':row['Heat End Time']
-                                    })
-                                    judge_idx+=1
-                        heat_idx += rotation_heats*len(available_judges)
+                    
+                    if not available_judges: 
+                        st.error(f"Aucun juge pour {wod}")
+                        continue
+                    
+                    # Nouvelle logique d'assignation
+                    heat_idx = 0
+                    judge_rotation_idx = 0  # Index pour la rotation des juges
+                    
+                    while heat_idx < len(heats):
+                        # Pour chaque groupe de rotation_heats
+                        for rotation_group in range(rotation_heats):
+                            current_heat_idx = heat_idx + rotation_group
+                            if current_heat_idx >= len(heats):
+                                break
+                                
+                            heat_num = heats[current_heat_idx]
+                            lines = data_wod[data_wod['Heat #']==heat_num].sort_values('Lane')
+                            
+                            # Assigner un juge différent à chaque ligne du heat
+                            for lane_idx, (_, row) in enumerate(lines.iterrows()):
+                                # Calculer l'index du juge en fonction de la rotation globale
+                                judge_index = (judge_rotation_idx + lane_idx) % len(available_judges)
+                                assigned_judge = available_judges[judge_index]
+                                
+                                planning[assigned_judge].append({
+                                    'wod': wod,
+                                    'heat': heat_num,
+                                    'lane': row['Lane'],
+                                    'athlete': row['Competitor'],
+                                    'division': row['Division'],
+                                    'location': row['Workout Location'],
+                                    'start': row['Heat Start Time'],
+                                    'end': row['Heat End Time']
+                                })
+                        
+                        # Avancer l'index des heats et mettre à jour la rotation des juges
+                        heat_idx += rotation_heats
+                        judge_rotation_idx = (judge_rotation_idx + 1) % len(available_judges)
 
+                # Génération des PDFs
                 pdf_j = generate_pdf_tableau({k:v for k,v in planning.items() if v})
                 pdf_h = generate_heat_pdf({k:v for k,v in planning.items() if v})
 
