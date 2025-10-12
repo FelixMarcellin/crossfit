@@ -143,7 +143,6 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
         group['Heat #'] = pd.to_numeric(group['Heat #'], errors='coerce').fillna(0).astype(int)
         group = group.sort_values(['Heat #', 'Lane'])
         heats = sorted(group['Heat #'].unique())
-        nb_juges = len(juges_dispo)
 
         juge_stats = {j: {'heats': 0, 'last_heat': -99, 'consec': 0} for j in juges_dispo}
 
@@ -152,7 +151,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
             assigned = set()
 
             for _, row in lines.iterrows():
-                # Juges disponibles
+                # Étape 1 : chercher juges respectant les contraintes
                 dispo = [
                     j for j, s in juge_stats.items()
                     if j not in assigned
@@ -160,13 +159,20 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
                     and (s['consec'] < rotation or (heat - s['last_heat']) > rotation)
                 ]
 
+                # Étape 2 : si aucun juge dispo selon les contraintes, assouplir
                 if not dispo:
                     dispo = [j for j in juges_dispo if j not in assigned]
 
-                # Prioriser ceux avec le moins de heats jugés
+                # Étape 3 : si toujours rien (trop peu de juges), on réinitialise la rotation
+                if not dispo:
+                    dispo = juges_dispo.copy()
+                    st.warning(f"⚠️ Pas assez de juges libres pour {wod} - Heat {heat}. Réaffectation forcée.")
+
+                # Trier selon le nombre total de heats jugés (équité)
                 dispo.sort(key=lambda j: juge_stats[j]['heats'])
                 juge = dispo[0]
 
+                # Affecter le juge
                 planning[juge].append({
                     'wod': wod,
                     'lane': row['Lane'],
@@ -178,7 +184,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
                     'heat': row['Heat #']
                 })
 
-                # MAJ stats
+                # Mise à jour des stats
                 juge_stats[juge]['heats'] += 1
                 juge_stats[juge]['consec'] = (
                     juge_stats[juge]['consec'] + 1 if heat - juge_stats[juge]['last_heat'] == 1 else 1
