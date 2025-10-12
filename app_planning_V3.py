@@ -13,9 +13,23 @@ import os
 from typing import Dict, List
 from collections import defaultdict
 import traceback
+import re
 
 st.set_page_config(page_title="Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin", layout="wide")
 st.title("Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin")
+
+def extract_heat_number(heat_value):
+    """Extrait le numéro du heat depuis différentes formats possibles"""
+    if pd.isna(heat_value):
+        return 0
+    if isinstance(heat_value, (int, float)):
+        return int(heat_value)
+    
+    # Cherche des chiffres dans la chaîne
+    numbers = re.findall(r'\d+', str(heat_value))
+    if numbers:
+        return int(numbers[0])
+    return 0
 
 def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     pdf = FPDF(orientation='P')
@@ -181,6 +195,10 @@ def main():
             st.subheader("Aperçu du planning importé")
             st.dataframe(schedule.head())
 
+            # Afficher un échantillon des valeurs de la colonne Heat #
+            st.write("Valeurs d'exemple dans la colonne 'Heat #':")
+            st.write(schedule['Heat #'].head(10).tolist())
+
             # Colonnes requises incluant maintenant "Heat #"
             required_columns = ['Workout', 'Lane', 'Competitor', 'Division', 'Workout Location', 'Heat Start Time', 'Heat End Time', 'Heat #']
             if not all(col in schedule.columns for col in required_columns):
@@ -191,6 +209,10 @@ def main():
 
             schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
             schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
+            
+            # Extraire les numéros de heat
+            schedule['Heat_Number'] = schedule['Heat #'].apply(extract_heat_number)
+            
             wods = sorted(schedule['Workout'].unique())
 
             st.header("Disponibilité des Juges par WOD")
@@ -243,10 +265,10 @@ def main():
                     wod_schedule = schedule[schedule['Workout'] == wod].copy()
                     
                     # Trier par heat et lane pour assurer l'ordre chronologique
-                    wod_schedule = wod_schedule.sort_values(['Heat #', 'Lane'])
+                    wod_schedule = wod_schedule.sort_values(['Heat_Number', 'Lane'])
                     
                     # Grouper par heat
-                    heats = wod_schedule.groupby('Heat #')
+                    heats = wod_schedule.groupby('Heat_Number')
                     
                     juge_index = 0
                     heat_count = 0
@@ -258,7 +280,7 @@ def main():
                         for _, row in heat_data.iterrows():
                             planning[juge_attribue].append({
                                 'wod': wod,
-                                'heat': int(row['Heat #']),
+                                'heat': int(heat_num),  # Utiliser le numéro extrait
                                 'lane': row['Lane'],
                                 'athlete': row['Competitor'],
                                 'division': row['Division'],
