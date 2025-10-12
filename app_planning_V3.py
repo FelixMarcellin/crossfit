@@ -177,16 +177,6 @@ def main():
             if judges:
                 st.write("Juges saisis:")
                 st.write(judges)
-        
-        # Paramètre pour le nombre de lanes consécutives par juge
-        st.header("Paramètres d'affectation")
-        lanes_par_juge = st.number_input(
-            "Nombre de lanes consécutives par juge",
-            min_value=1,
-            max_value=10,
-            value=1,
-            help="Chaque juge jugera ce nombre de lanes consécutives avant de passer au juge suivant"
-        )
 
     if schedule_file and judges:
         try:
@@ -254,7 +244,21 @@ def main():
             if st.button("Générer les plannings"):
                 planning = {juge: [] for juge in judges}
                 
-                # Traitement par WOD
+                # Compter le nombre total de créneaux par WOD
+                total_creneaux_par_wod = {}
+                for wod in wods:
+                    wod_schedule = schedule[schedule['Workout'] == wod]
+                    total_creneaux_par_wod[wod] = len(wod_schedule)
+                
+                st.write("Répartition cible:")
+                for wod in wods:
+                    juges_dispo = list(st.session_state.disponibilites[wod])
+                    if juges_dispo:
+                        creneaux_par_juge = total_creneaux_par_wod[wod] // len(juges_dispo)
+                        reste = total_creneaux_par_wod[wod] % len(juges_dispo)
+                        st.write(f"{wod}: {creneaux_par_juge} créneaux/juge + {reste} créneaux supplémentaires")
+                
+                # Traitement par WOD avec répartition équitable
                 for wod in wods:
                     juges_dispo = list(st.session_state.disponibilites[wod])
                     if not juges_dispo:
@@ -267,37 +271,39 @@ def main():
                     # Trier par heat et lane pour assurer l'ordre chronologique
                     wod_schedule = wod_schedule.sort_values(['Heat_Number', 'Lane'])
                     
-                    # Grouper par heat
-                    heats = wod_schedule.groupby('Heat_Number')
+                    # Calculer la répartition équitable
+                    total_creneaux = len(wod_schedule)
+                    creneaux_par_juge = total_creneaux // len(juges_dispo)
+                    reste = total_creneaux % len(juges_dispo)
                     
-                    for heat_num, heat_data in heats:
-                        # Trier les lanes dans l'ordre
-                        heat_data = heat_data.sort_values('Lane')
+                    # Créer une liste de juges avec le nombre de créneaux cible pour chacun
+                    repartition_juges = []
+                    for i, juge in enumerate(juges_dispo):
+                        count = creneaux_par_juge + (1 if i < reste else 0)
+                        repartition_juges.extend([juge] * count)
+                    
+                    # Mélanger pour éviter les patterns
+                    import random
+                    random.shuffle(repartition_juges)
+                    
+                    # Attribuer les créneaux
+                    for idx, (_, row) in enumerate(wod_schedule.iterrows()):
+                        if idx < len(repartition_juges):
+                            juge_attribue = repartition_juges[idx]
+                        else:
+                            # Si plus de créneaux que prévu, répartir équitablement
+                            juge_attribue = juges_dispo[idx % len(juges_dispo)]
                         
-                        juge_index = 0
-                        lane_count = 0
-                        
-                        for _, row in heat_data.iterrows():
-                            # Attribuer un juge pour cette lane
-                            juge_attribue = juges_dispo[juge_index]
-                            
-                            planning[juge_attribue].append({
-                                'wod': wod,
-                                'heat': int(heat_num),
-                                'lane': row['Lane'],
-                                'athlete': row['Competitor'],
-                                'division': row['Division'],
-                                'location': row['Workout Location'],
-                                'start': row['Heat Start Time'],
-                                'end': row['Heat End Time']
-                            })
-                            
-                            lane_count += 1
-                            
-                            # Changer de juge après X lanes consécutives
-                            if lane_count >= lanes_par_juge:
-                                juge_index = (juge_index + 1) % len(juges_dispo)
-                                lane_count = 0
+                        planning[juge_attribue].append({
+                            'wod': wod,
+                            'heat': int(row['Heat_Number']),
+                            'lane': row['Lane'],
+                            'athlete': row['Competitor'],
+                            'division': row['Division'],
+                            'location': row['Workout Location'],
+                            'start': row['Heat Start Time'],
+                            'end': row['Heat End Time']
+                        })
 
                 # Génération des PDF
                 pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
@@ -326,14 +332,37 @@ def main():
                     os.unlink(tmp_heats.name)
 
                 st.success("PDF générés avec succès!")
+                
+                # Afficher le récapitulatif des affectations
                 st.header("Récapitulatif des affectations")
+                recap_data = []
                 for juge, creneaux in planning.items():
                     if creneaux:
+                        recap_data.append({
+                            'Juge': juge,
+                            'Total créneaux': len(creneaux),
+                            'WODs différents': len({c['wod'] for c in creneaux})
+                        })
                         with st.expander(f"Juge: {juge} ({len(creneaux)} créneaux)"):
                             df_affectations = pd.DataFrame(creneaux)
                             # Trier par WOD, heat et lane pour une meilleure lisibilité
                             df_affectations = df_affectations.sort_values(['wod', 'heat', 'lane'])
                             st.table(df_affectations)
+                
+                if recap_data:
+                    df_recap = pd.DataFrame(recap_data)
+                    st.subheader("Synthèse de la répartition")
+                    st.dataframe(df_recap)
+                    
+                    # Vérifier l'équilibre
+                    min_creneaux = df_recap['Total créneaux'].min()
+                    max_creneaux = df_recap['Total créneaux'].max()
+                    difference = max_creneaux - min_creneaux
+                    
+                    if difference <= 2:
+                        st.success(f"✅ Répartition équilibrée! Écart maximum: {difference} créneau(x)")
+                    else:
+                        st.warning(f"⚠️ Répartition déséquilibrée. Écart maximum: {difference} créneaux")
 
         except Exception as e:
             st.error("Erreur lors du traitement:")
