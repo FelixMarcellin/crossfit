@@ -168,17 +168,6 @@ def is_juge_available(juge, creneau, planning, schedule):
     
     return True
 
-def find_available_juge(creneau, juges_dispo, planning, schedule, juge_counts):
-    """Trouve un juge disponible pour un créneau donné"""
-    # Trier les juges par nombre d'attributions (le moins chargé en premier)
-    juges_tries = sorted(juges_dispo, key=lambda j: juge_counts.get(j, 0))
-    
-    for juge in juges_tries:
-        if is_juge_available(juge, creneau, planning, schedule):
-            return juge
-    
-    return None
-
 def main():
     with st.sidebar:
         st.header("Import des fichiers")
@@ -211,6 +200,16 @@ def main():
             if judges:
                 st.write("Juges saisis:")
                 st.write(judges)
+        
+        # Paramètre pour le nombre de heats consécutifs
+        st.header("Paramètres d'affectation")
+        heats_consecutifs = st.number_input(
+            "Nombre de heats consécutifs par juge avant rotation",
+            min_value=1,
+            max_value=10,
+            value=2,
+            help="Chaque juge jugera 1 lane par heat pendant ce nombre de heats avant de passer au juge suivant"
+        )
 
     if schedule_file and judges:
         try:
@@ -277,23 +276,8 @@ def main():
 
             if st.button("Générer les plannings"):
                 planning = {juge: [] for juge in judges}
-                juge_counts = {juge: 0 for juge in judges}
                 
-                # Compter le nombre total de créneaux par WOD
-                total_creneaux_par_wod = {}
-                for wod in wods:
-                    wod_schedule = schedule[schedule['Workout'] == wod]
-                    total_creneaux_par_wod[wod] = len(wod_schedule)
-                
-                st.write("Répartition cible:")
-                for wod in wods:
-                    juges_dispo = list(st.session_state.disponibilites[wod])
-                    if juges_dispo:
-                        creneaux_par_juge = total_creneaux_par_wod[wod] // len(juges_dispo)
-                        reste = total_creneaux_par_wod[wod] % len(juges_dispo)
-                        st.write(f"{wod}: {creneaux_par_juge} créneaux/juge + {reste} créneaux supplémentaires")
-                
-                # Traitement par WOD avec vérification des conflits horaires
+                # Traitement par WOD
                 for wod in wods:
                     juges_dispo = list(st.session_state.disponibilites[wod])
                     if not juges_dispo:
@@ -306,27 +290,57 @@ def main():
                     # Trier par heat et lane pour assurer l'ordre chronologique
                     wod_schedule = wod_schedule.sort_values(['Heat_Number', 'Lane'])
                     
-                    # Traiter les créneaux dans l'ordre chronologique
-                    for _, row in wod_schedule.iterrows():
-                        creneau = {
-                            'wod': wod,
-                            'heat': int(row['Heat_Number']),
-                            'lane': row['Lane'],
-                            'athlete': row['Competitor'],
-                            'division': row['Division'],
-                            'location': row['Workout Location'],
-                            'start': row['Heat Start Time'],
-                            'end': row['Heat End Time']
-                        }
+                    # Grouper par heat
+                    heats_groups = list(wod_schedule.groupby('Heat_Number'))
+                    
+                    juge_index = 0
+                    heat_count = 0
+                    
+                    # Parcourir les heats dans l'ordre
+                    for heat_idx, (heat_num, heat_data) in enumerate(heats_groups):
+                        # Trier les lanes dans l'ordre
+                        lanes_sorted = heat_data.sort_values('Lane')
                         
-                        # Trouver un juge disponible pour ce créneau
-                        juge_attribue = find_available_juge(creneau, juges_dispo, planning, schedule, juge_counts)
-                        
-                        if juge_attribue:
-                            planning[juge_attribue].append(creneau)
-                            juge_counts[juge_attribue] += 1
-                        else:
-                            st.warning(f"Aucun juge disponible pour le créneau {creneau['start']}-{creneau['end']} (WOD {wod}, Lane {creneau['lane']})")
+                        # Pour chaque heat, attribuer 1 lane au juge courant
+                        if len(lanes_sorted) > 0:
+                            # Prendre la première lane disponible de ce heat
+                            row = lanes_sorted.iloc[0]
+                            creneau = {
+                                'wod': wod,
+                                'heat': int(heat_num),
+                                'lane': row['Lane'],
+                                'athlete': row['Competitor'],
+                                'division': row['Division'],
+                                'location': row['Workout Location'],
+                                'start': row['Heat Start Time'],
+                                'end': row['Heat End Time']
+                            }
+                            
+                            juge_courant = juges_dispo[juge_index]
+                            
+                            # Vérifier si le juge est disponible pour ce créneau
+                            if is_juge_available(juge_courant, creneau, planning, schedule):
+                                planning[juge_courant].append(creneau)
+                                heat_count += 1
+                                
+                                # Changer de juge après X heats consécutifs
+                                if heat_count >= heats_consecutifs:
+                                    juge_index = (juge_index + 1) % len(juges_dispo)
+                                    heat_count = 0
+                            else:
+                                # Si le juge n'est pas disponible, essayer le suivant
+                                juge_trouve = False
+                                for i in range(len(juges_dispo)):
+                                    juge_candidat = juges_dispo[(juge_index + i) % len(juges_dispo)]
+                                    if is_juge_available(juge_candidat, creneau, planning, schedule):
+                                        planning[juge_candidat].append(creneau)
+                                        juge_index = (juge_index + i) % len(juges_dispo)
+                                        heat_count = 1
+                                        juge_trouve = True
+                                        break
+                                
+                                if not juge_trouve:
+                                    st.warning(f"Aucun juge disponible pour le créneau {creneau['start']}-{creneau['end']} (WOD {wod}, Lane {creneau['lane']})")
 
                 # Vérifier les conflits horaires
                 st.subheader("Vérification des conflits horaires")
