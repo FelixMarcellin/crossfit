@@ -13,6 +13,7 @@ import os
 from typing import Dict, List
 from collections import defaultdict
 import traceback
+import itertools
 
 st.set_page_config(page_title="Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin", layout="wide")
 st.title("Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin")
@@ -150,8 +151,8 @@ def main():
                 st.write("Juges saisis:")
                 st.write(judges)
 
-        # Nouveau paramètre : nombre de heats consécutifs par juge
-        rotation = st.radio("Combien de heats un juge enchaîne avant rotation ?", options=[1, 2], index=0)
+        # Nouveau paramètre : nombre de heats consécutifs actifs
+        rotation = st.radio("Nombre de heats consécutifs par juge avant repos", options=[1, 2], index=1)
 
     if schedule_file and judges:
         try:
@@ -188,26 +189,38 @@ def main():
             if st.button("Générer les plannings"):
                 planning = {j: [] for j in judges}
 
-                # Parcourir chaque WOD
                 for wod, group in schedule.groupby('Workout'):
                     juges_dispo = list(disponibilites[wod])
                     if not juges_dispo:
                         st.error(f"Aucun juge disponible pour {wod}!")
                         continue
 
-                    # Trier par Heat #
                     group = group.sort_values(['Heat #', 'Lane'])
-                    heats = group['Heat #'].unique()
-                    juge_idx = 0
+                    heats = sorted(group['Heat #'].unique())
 
-                    for i, heat in enumerate(heats):
-                        lines = group[group['Heat #'] == heat]
+                    nb_juges = len(juges_dispo)
+                    nb_lanes = group['Lane'].nunique()
+                    active_juges = nb_lanes
+                    repos_juges = nb_juges - active_juges
 
-                        # Juge actuel
-                        juge = juges_dispo[juge_idx % len(juges_dispo)]
+                    juge_cycle = itertools.cycle(juges_dispo)
+                    rotation_cycle = []
 
-                        # Chaque ligne de ce heat -> même juge
-                        for _, row in lines.iterrows():
+                    # Créer une rotation équilibrée
+                    for i in range(0, nb_juges, active_juges):
+                        rotation_cycle.append(juges_dispo[i:i+active_juges])
+
+                    juge_index = 0
+                    for heat_idx, heat in enumerate(heats):
+                        lines = group[group['Heat #'] == heat].sort_values('Lane').reset_index(drop=True)
+
+                        # Calcul du groupe de juges actifs
+                        bloc = (heat_idx // rotation) % (len(juges_dispo) // active_juges)
+                        juges_actifs = rotation_cycle[bloc]
+
+                        # Affectation des lanes aux juges actifs
+                        for lane_idx, (_, row) in enumerate(lines.iterrows()):
+                            juge = juges_actifs[lane_idx % len(juges_actifs)]
                             planning[juge].append({
                                 'wod': wod,
                                 'lane': row['Lane'],
@@ -218,10 +231,6 @@ def main():
                                 'end': row['Heat End Time'],
                                 'heat': row['Heat #']
                             })
-
-                        # Rotation tous les X heats
-                        if (i + 1) % rotation == 0:
-                            juge_idx += 1
 
                 pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
                 pdf_heats = generate_heat_pdf({k: v for k, v in planning.items() if v})
