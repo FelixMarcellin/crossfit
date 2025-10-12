@@ -1,12 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sun Oct 12 15:24:22 2025
-
-@author: felima
-"""
-
-# -*- coding: utf-8 -*-
-"""
 Created on Tue Jun 24 14:48:50 2025
 
 @author: felima
@@ -23,6 +16,27 @@ import traceback
 
 st.set_page_config(page_title="Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin", layout="wide")
 st.title("Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin")
+
+
+# ---------------------------------------------------------------------------
+# Helper: test de chevauchement entre deux intervalles (start/end)
+# ---------------------------------------------------------------------------
+def overlaps(a_start, a_end, b_start, b_end) -> bool:
+    """
+    Retourne True si les intervalles [a_start, a_end) et [b_start, b_end) se chevauchent.
+    Fonction compatible avec pandas.Timestamp ou des strings formatées.
+    """
+    try:
+        # Convert to pandas Timestamp si nécessaire
+        a_s = pd.to_datetime(a_start)
+        a_e = pd.to_datetime(a_end)
+        b_s = pd.to_datetime(b_start)
+        b_e = pd.to_datetime(b_end)
+    except Exception:
+        # En dernier recours, comparer comme strings (moins fiable)
+        return not (a_end <= b_start or a_start >= b_end)
+
+    return not (a_e <= b_s or a_s >= b_e)
 
 
 # ---------------------------------------------------------------------------
@@ -179,99 +193,4 @@ def main():
             st.dataframe(schedule.head())
 
             required_columns = ['Workout', 'Lane', 'Competitor', 'Division', 'Workout Location', 'Heat Start Time', 'Heat End Time']
-            if not all(col in schedule.columns for col in required_columns):
-                st.error("Erreur: Colonnes manquantes.")
-                st.write("Colonnes requises:", required_columns)
-                st.write("Colonnes trouvées:", list(schedule.columns))
-                return
-
-            schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
-            schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
-            wods = sorted(schedule['Workout'].unique())
-
-            st.header("Disponibilité des Juges par WOD")
-            disponibilites = {wod: set() for wod in wods}
-            cols = st.columns(3)
-            for i, wod in enumerate(wods):
-                with cols[i % 3]:
-                    with st.expander(f"WOD: {wod}"):
-                        disponibilites[wod] = set(st.multiselect(
-                            f"Sélection pour {wod}",
-                            judges,
-                            key=f"dispo_{wod}"
-                        ))
-
-            # 🆕 Nouvelle option : rotation des juges
-            rotation_freq = st.selectbox(
-                "Changer de juge tous les ... heats",
-                options=[1, 2],
-                index=0,
-                help="1 = changement à chaque heat, 2 = tous les 2 heats"
-            )
-
-            if st.button("Générer les plannings"):
-                planning = {juge: [] for juge in judges}
-                grouped = schedule.groupby(['Workout', 'Heat Start Time', 'Heat End Time', 'Workout Location'])
-                all_groups = list(grouped.groups.keys())
-
-                for idx, (wod, start, end, location) in enumerate(all_groups):
-                    juges_dispo = list(disponibilites[wod])
-                    if not juges_dispo:
-                        st.error(f"Aucun juge pour {wod}!")
-                        continue
-
-                    juge_index = (idx // rotation_freq) % len(juges_dispo)
-                    juge_attribue = juges_dispo[juge_index]
-
-                    for _, row in grouped.get_group((wod, start, end, location)).iterrows():
-                        planning[juge_attribue].append({
-                            'wod': wod,
-                            'lane': row['Lane'],
-                            'athlete': row['Competitor'],
-                            'division': row['Division'],
-                            'location': location,
-                            'start': start,
-                            'end': end
-                        })
-
-                pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
-                pdf_heats = generate_heat_pdf({k: v for k, v in planning.items() if v})
-
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_juges:
-                    pdf_juges.output(tmp_juges.name)
-                    with open(tmp_juges.name, "rb") as f:
-                        st.download_button(
-                            "Télécharger planning par juge",
-                            data=f,
-                            file_name="planning_juges.pdf",
-                            mime="application/pdf"
-                        )
-                    os.unlink(tmp_juges.name)
-
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_heats:
-                    pdf_heats.output(tmp_heats.name)
-                    with open(tmp_heats.name, "rb") as f:
-                        st.download_button(
-                            "Télécharger planning par heat",
-                            data=f,
-                            file_name="planning_heats.pdf",
-                            mime="application/pdf"
-                        )
-                    os.unlink(tmp_heats.name)
-
-                st.success("PDF générés avec succès!")
-                st.header("Récapitulatif des affectations")
-                for juge, creneaux in planning.items():
-                    if creneaux:
-                        with st.expander(f"Juge: {juge} ({len(creneaux)} créneaux)"):
-                            st.table(pd.DataFrame(creneaux))
-
-        except Exception as e:
-            st.error("Erreur lors du traitement:")
-            st.code(traceback.format_exc())
-    else:
-        st.info("Veuillez uploader le fichier de planning et saisir les juges pour commencer")
-
-
-if __name__ == "__main__":
-    main()
+            if not
