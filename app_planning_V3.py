@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version équitable : chaque juge fait 2 heats puis 2 heats de repos (si possible)
+Version : équitable + conversion automatique Heat #
 """
 
 import streamlit as st
@@ -139,20 +139,20 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
             st.error(f"Aucun juge sélectionné pour {wod}")
             continue
 
+        # Forcer la colonne Heat # en int
+        group['Heat #'] = pd.to_numeric(group['Heat #'], errors='coerce').fillna(0).astype(int)
         group = group.sort_values(['Heat #', 'Lane'])
         heats = sorted(group['Heat #'].unique())
         nb_juges = len(juges_dispo)
-        nb_lanes = group['Lane'].nunique()
 
-        # Suivi du nombre de heats jugés et du dernier heat de chaque juge
         juge_stats = {j: {'heats': 0, 'last_heat': -99, 'consec': 0} for j in juges_dispo}
 
-        for heat in heats:
+        for heat in map(int, heats):
             lines = group[group['Heat #'] == heat].sort_values('Lane')
             assigned = set()
 
             for _, row in lines.iterrows():
-                # Trouver les juges disponibles
+                # Juges disponibles
                 dispo = [
                     j for j, s in juge_stats.items()
                     if j not in assigned
@@ -163,11 +163,10 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
                 if not dispo:
                     dispo = [j for j in juges_dispo if j not in assigned]
 
-                # Choisir le juge avec le moins de heats jugés
+                # Prioriser ceux avec le moins de heats jugés
                 dispo.sort(key=lambda j: juge_stats[j]['heats'])
                 juge = dispo[0]
 
-                # Affecter le juge à cette ligne
                 planning[juge].append({
                     'wod': wod,
                     'lane': row['Lane'],
@@ -179,7 +178,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
                     'heat': row['Heat #']
                 })
 
-                # Mettre à jour les stats
+                # MAJ stats
                 juge_stats[juge]['heats'] += 1
                 juge_stats[juge]['consec'] = (
                     juge_stats[juge]['consec'] + 1 if heat - juge_stats[juge]['last_heat'] == 1 else 1
@@ -217,6 +216,11 @@ def main():
     if schedule_file and judges:
         try:
             schedule = pd.read_excel(schedule_file, engine='openpyxl')
+
+            # Conversion Heat # dès lecture
+            if 'Heat #' in schedule.columns:
+                schedule['Heat #'] = pd.to_numeric(schedule['Heat #'], errors='coerce').fillna(0).astype(int)
+
             required_columns = ['Workout', 'Lane', 'Competitor', 'Division', 'Workout Location',
                                 'Heat Start Time', 'Heat End Time', 'Heat #']
             if not all(col in schedule.columns for col in required_columns):
