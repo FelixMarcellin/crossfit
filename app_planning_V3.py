@@ -181,8 +181,8 @@ def main():
             st.subheader("Aperçu du planning importé")
             st.dataframe(schedule.head())
 
-            # Colonnes requises incluant maintenant "# Heat"
-            required_columns = ['Workout', 'Lane', 'Competitor', 'Division', 'Workout Location', 'Heat Start Time', 'Heat End Time', '# Heat']
+            # Colonnes requises incluant maintenant "Heat #"
+            required_columns = ['Workout', 'Lane', 'Competitor', 'Division', 'Workout Location', 'Heat Start Time', 'Heat End Time', 'Heat #']
             if not all(col in schedule.columns for col in required_columns):
                 st.error("Erreur: Colonnes manquantes.")
                 st.write("Colonnes requises:", required_columns)
@@ -232,10 +232,10 @@ def main():
                     wod_schedule = schedule[schedule['Workout'] == wod].copy()
                     
                     # Trier par heat et lane pour assurer l'ordre chronologique
-                    wod_schedule = wod_schedule.sort_values(['# Heat', 'Lane'])
+                    wod_schedule = wod_schedule.sort_values(['Heat #', 'Lane'])
                     
                     # Grouper par heat
-                    heats = wod_schedule.groupby('# Heat')
+                    heats = wod_schedule.groupby('Heat #')
                     
                     juge_index = 0
                     heat_count = 0
@@ -247,7 +247,7 @@ def main():
                         for _, row in heat_data.iterrows():
                             planning[juge_attribue].append({
                                 'wod': wod,
-                                'heat': int(row['# Heat']),
+                                'heat': int(row['Heat #']),
                                 'lane': row['Lane'],
                                 'athlete': row['Competitor'],
                                 'division': row['Division'],
