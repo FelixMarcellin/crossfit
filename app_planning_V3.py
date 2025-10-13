@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
 """
+Created on Mon Oct 13 16:05:04 2025
+
+@author: felima
+"""
+
+# -*- coding: utf-8 -*-
+"""
 Planning Juges équilibré - Crossfit Amiens
 Version finale : équité, rotation, et affichage "Heat X"
 """
@@ -149,86 +156,162 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
 
 # ============================================================
-# ATTRIBUTION ÉQUITABLE DES JUGES - VERSION CORRIGÉE
+# EXTRACTION DU NUMÉRO DE HEAT
+# ============================================================
+def extract_heat_number(heat_str):
+    """Extrait le numéro du heat d'une string comme 'Heat 4'"""
+    if pd.isna(heat_str):
+        return 0
+    if isinstance(heat_str, (int, float)):
+        return int(heat_str)
+    if isinstance(heat_str, str):
+        try:
+            # Essaye d'extraire le nombre de "Heat X"
+            import re
+            numbers = re.findall(r'\d+', str(heat_str))
+            if numbers:
+                return int(numbers[0])
+        except:
+            pass
+    return 0
+
+
+# ============================================================
+# ATTRIBUTION ÉQUITABLE DES JUGES - VERSION CORRIGÉE AVEC ROTATION
 # ============================================================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation):
     planning = {j: [] for j in judges}
 
-    for wod, group in schedule.groupby('Workout'):
+    # Préparer les données avec les numéros de heat
+    schedule_with_heat_nums = schedule.copy()
+    schedule_with_heat_nums['heat_num'] = schedule_with_heat_nums['Heat #'].apply(extract_heat_number)
+    
+    # Créer un mapping heat_text -> heat_num pour chaque WOD
+    heat_mapping = {}
+    for wod, group in schedule_with_heat_nums.groupby('Workout'):
+        heat_mapping[wod] = {}
+        for _, row in group.iterrows():
+            heat_mapping[wod][row['Heat #']] = row['heat_num']
+
+    for wod, group in schedule_with_heat_nums.groupby('Workout'):
         juges_dispo = list(disponibilites[wod])
         if not juges_dispo:
             st.error(f"Aucun juge sélectionné pour {wod}")
             continue
 
-        # Trier par Heat # et Lane (en gardant le texte original)
-        group = group.sort_values(['Heat #', 'Lane'])
+        # Trier par numéro de heat et lane
+        group = group.sort_values(['heat_num', 'Lane'])
         
-        juge_stats = {j: {'heats': 0, 'last_heat': '', 'consec': 0} for j in juges_dispo}
-        
-        # Initialiser assigned pour chaque WOD
-        assigned = set()
+        # Initialiser les stats des juges
+        juge_stats = {j: {
+            'heats': 0, 
+            'last_heat_num': -1, 
+            'consecutive_count': 0,
+            'assigned_heats': set()
+        } for j in juges_dispo}
 
+        # Traiter les heats dans l'ordre
+        current_heat_num = -1
+        current_heat_group = []
+        
         for idx, row in group.iterrows():
-            # Récupérer le texte ORIGINAL du Heat # depuis la ligne
-            original_heat = row['Heat #']
+            heat_text = row['Heat #']
+            heat_num = row['heat_num']
             
-            # Garder le texte original comme heat_label
-            heat_label = str(original_heat) if not pd.isna(original_heat) else "Heat 0"
-
-            # Pour la logique de rotation, on va extraire le numéro du heat si possible
-            heat_num = 0
-            if isinstance(original_heat, str) and 'Heat' in original_heat:
-                # Extraire le numéro du texte "Heat X"
-                try:
-                    heat_num = int(original_heat.replace('Heat', '').strip())
-                except:
-                    heat_num = 0
-            elif isinstance(original_heat, (int, float)):
-                heat_num = int(original_heat)
-
-            # Trouver les juges disponibles
-            dispo = [
-                j for j, s in juge_stats.items()
-                if j not in assigned
-                and (s['last_heat'] != original_heat)  # Éviter le même heat
-                and (s['consec'] < rotation)
-            ]
+            # Si on change de heat num, traiter le groupe précédent
+            if heat_num != current_heat_num and current_heat_group:
+                # Attribuer les juges pour le heat précédent
+                _assign_judes_to_heat_group(current_heat_group, juge_stats, juges_dispo, rotation, planning)
+                current_heat_group = []
             
-            if not dispo:
-                dispo = [j for j in juges_dispo if j not in assigned]
-            if not dispo:
-                dispo = juges_dispo.copy()
-                st.warning(f"⚠️ Pas assez de juges libres pour {wod} - {heat_label}. Réaffectation forcée.")
-
-            # Choisir le juge avec le moins d'assignations
-            dispo.sort(key=lambda j: juge_stats[j]['heats'])
-            juge = dispo[0]
-
-            # Ajouter au planning
-            planning[juge].append({
-                'wod': wod,
-                'lane': row.get('Lane', ''),
-                'athlete': row.get('Competitor', ''),
-                'division': row.get('Division', ''),
-                'location': row.get('Workout Location', ''),
-                'start': row.get('Heat Start Time', ''),
-                'end': row.get('Heat End Time', ''),
-                'heat': heat_label  # Utiliser le texte original
-            })
-
-            # Mettre à jour les statistiques du juge
-            juge_stats[juge]['heats'] += 1
-            
-            # Vérifier si heat consécutif
-            if juge_stats[juge]['last_heat'] == original_heat:
-                juge_stats[juge]['consec'] += 1
-            else:
-                juge_stats[juge]['consec'] = 1
-                
-            juge_stats[juge]['last_heat'] = original_heat
-            assigned.add(juge)
+            current_heat_num = heat_num
+            current_heat_group.append((idx, row))
+        
+        # Traiter le dernier groupe
+        if current_heat_group:
+            _assign_judes_to_heat_group(current_heat_group, juge_stats, juges_dispo, rotation, planning)
 
     return planning
+
+
+def _assign_judes_to_heat_group(heat_group, juge_stats, juges_dispo, rotation, planning):
+    """Attribue les juges pour un groupe de lignes du même heat"""
+    # Trier les juges par nombre d'assignations (pour l'équité)
+    juges_tries = sorted(juges_dispo, key=lambda j: juge_stats[j]['heats'])
+    
+    assigned_judges = set()
+    
+    for idx, row in heat_group:
+        heat_text = row['Heat #']
+        heat_num = row['heat_num']
+        
+        # Trouver les juges disponibles pour ce heat
+        available_judges = []
+        
+        for juge in juges_tries:
+            if juge in assigned_judges:
+                continue
+                
+            stats = juge_stats[juge]
+            
+            # Vérifier si le juge peut prendre ce heat selon la rotation
+            can_assign = True
+            
+            if rotation == 1:
+                # Rotation 1: pas de heats consécutifs
+                if stats['last_heat_num'] != -1 and heat_num - stats['last_heat_num'] == 1:
+                    can_assign = False
+            elif rotation == 2:
+                # Rotation 2: max 2 heats consécutifs, puis 2 heats de repos
+                if stats['last_heat_num'] != -1:
+                    gap = heat_num - stats['last_heat_num']
+                    if gap == 1:  # Heat consécutif
+                        if stats['consecutive_count'] >= 2:
+                            can_assign = False
+                    elif gap == 2:  # 1 heat de repos
+                        if stats['consecutive_count'] >= 2:
+                            can_assign = False
+                    # Pour gap >= 3, toujours autorisé
+            
+            if can_assign:
+                available_judges.append(juge)
+        
+        # Si pas de juges disponibles avec les contraintes, relâcher les contraintes
+        if not available_judges:
+            available_judges = [j for j in juges_tries if j not in assigned_judges]
+        
+        # Si toujours pas, prendre n'importe quel juge
+        if not available_judges:
+            available_judges = juges_dispo.copy()
+        
+        # Choisir le juge avec le moins d'assignations
+        available_judges.sort(key=lambda j: juge_stats[j]['heats'])
+        juge_choisi = available_judges[0]
+        
+        # Mettre à jour les stats
+        stats = juge_stats[juge_choisi]
+        if stats['last_heat_num'] != -1 and heat_num - stats['last_heat_num'] == 1:
+            stats['consecutive_count'] += 1
+        else:
+            stats['consecutive_count'] = 1
+            
+        stats['last_heat_num'] = heat_num
+        stats['heats'] += 1
+        stats['assigned_heats'].add(heat_num)
+        
+        assigned_judges.add(juge_choisi)
+        
+        # Ajouter au planning
+        planning[juge_choisi].append({
+            'wod': row['Workout'],
+            'lane': row.get('Lane', ''),
+            'athlete': row.get('Competitor', ''),
+            'division': row.get('Division', ''),
+            'location': row.get('Workout Location', ''),
+            'start': row.get('Heat Start Time', ''),
+            'end': row.get('Heat End Time', ''),
+            'heat': heat_text
+        })
 
 
 # ============================================================
@@ -253,7 +336,17 @@ def main():
                 st.write("Juges saisis:")
                 st.write(judges)
 
-        rotation = st.radio("Nombre de heats consécutifs par juge", options=[1, 2], index=1)
+        st.header("Paramètres de rotation")
+        rotation = st.radio("Nombre de heats consécutifs par juge", 
+                           options=[1, 2], 
+                           index=1,
+                           help="1 = pas de heats consécutifs, 2 = max 2 heats consécutifs puis repos")
+        
+        st.info("""
+        **Explication de la rotation:**
+        - **1 heat consécutif**: Les juges ne font jamais 2 heats de suite
+        - **2 heats consécutifs**: Les juges peuvent faire max 2 heats de suite, puis au moins 2 heats de repos
+        """)
 
     if schedule_file and judges:
         try:
@@ -271,12 +364,14 @@ def main():
             schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
             schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
             
-            # NE PAS convertir Heat # - garder le texte original
+            # Aperçu des données
             st.subheader("Structure des données chargées")
             st.write("Aperçu des données:")
             st.dataframe(schedule[['Workout', 'Heat #', 'Lane', 'Competitor']].head())
             
-            st.write("Valeurs uniques dans 'Heat #':", schedule['Heat #'].unique())
+            # Extraire les numéros de heat pour debug
+            schedule['heat_num_debug'] = schedule['Heat #'].apply(extract_heat_number)
+            st.write("Numéros de heat extraits:", sorted(schedule['heat_num_debug'].unique()))
             
             wods = sorted(schedule['Workout'].unique())
 
@@ -302,12 +397,37 @@ def main():
 
                 planning = assign_judges_equitable(schedule, judges, disponibilites, rotation)
 
-                # Vérification finale
-                st.subheader("Vérification du planning généré")
+                # Vérification finale avec analyse de la rotation
+                st.subheader("Analyse de la rotation des juges")
                 for juge, creneaux in planning.items():
                     if creneaux:
-                        heats = [c['heat'] for c in creneaux]
-                        st.write(f"{juge}: {len(creneaux)} créneaux, Heats: {set(heats)}")
+                        # Trier par WOD et numéro de heat
+                        creneaux_sorted = sorted(creneaux, key=lambda x: (x['wod'], extract_heat_number(x['heat'])))
+                        heats_by_wod = {}
+                        for c in creneaux_sorted:
+                            wod = c['wod']
+                            heat_num = extract_heat_number(c['heat'])
+                            if wod not in heats_by_wod:
+                                heats_by_wod[wod] = []
+                            heats_by_wod[wod].append(heat_num)
+                        
+                        # Analyser les séquences consécutives
+                        consecutive_analysis = []
+                        for wod, heat_nums in heats_by_wod.items():
+                            if len(heat_nums) > 1:
+                                consecutive_count = 1
+                                for i in range(1, len(heat_nums)):
+                                    if heat_nums[i] - heat_nums[i-1] == 1:
+                                        consecutive_count += 1
+                                    else:
+                                        if consecutive_count > 1:
+                                            consecutive_analysis.append(f"{wod}: {consecutive_count} heats consécutifs")
+                                        consecutive_count = 1
+                                if consecutive_count > 1:
+                                    consecutive_analysis.append(f"{wod}: {consecutive_count} heats consécutifs")
+                        
+                        analysis_text = " | ".join(consecutive_analysis) if consecutive_analysis else "Aucune séquence consécutive"
+                        st.write(f"**{juge}** ({len(creneaux)} créneaux): {analysis_text}")
 
                 # Générer les PDFs
                 pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
@@ -326,16 +446,6 @@ def main():
                     os.unlink(tmp2.name)
 
                 st.success("✅ Plannings générés avec succès !")
-
-                # Aperçu du planning
-                st.header("Aperçu des affectations")
-                for juge, creneaux in planning.items():
-                    if creneaux:
-                        with st.expander(f"{juge} ({len(creneaux)} créneaux)"):
-                            df_affectations = pd.DataFrame(creneaux)
-                            colonnes = ['wod', 'heat', 'lane', 'athlete', 'start', 'end']
-                            colonnes = [col for col in colonnes if col in df_affectations.columns]
-                            st.dataframe(df_affectations[colonnes])
 
         except Exception as e:
             st.error("Erreur lors du traitement :")
