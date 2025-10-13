@@ -149,19 +149,10 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
 
 # ============================================================
-# ATTRIBUTION ÉQUITABLE DES JUGES - VERSION DEBUG
+# ATTRIBUTION ÉQUITABLE DES JUGES - VERSION CORRIGÉE
 # ============================================================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation):
     planning = {j: [] for j in judges}
-
-    # DEBUG: Afficher les premières lignes pour voir la structure
-    st.write("🔍 DEBUG - Structure des données:")
-    st.write("Colonnes:", list(schedule.columns))
-    st.write("Premières lignes:", schedule[['Workout', 'Heat #', 'Lane', 'Competitor']].head(10))
-    
-    # Vérification spécifique de la colonne Heat #
-    st.write("🔍 DEBUG - Valeurs uniques de 'Heat #':", schedule['Heat #'].unique())
-    st.write("🔍 DEBUG - Types de 'Heat #':", schedule['Heat #'].apply(type).unique())
 
     for wod, group in schedule.groupby('Workout'):
         juges_dispo = list(disponibilites[wod])
@@ -169,54 +160,45 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
             st.error(f"Aucun juge sélectionné pour {wod}")
             continue
 
-        # DEBUG pour ce WOD
-        st.write(f"🔍 DEBUG - WOD {wod}:")
-        st.write(f"  Nombre de lignes: {len(group)}")
-        st.write(f"  Valeurs de 'Heat #' dans ce WOD: {group['Heat #'].unique()}")
-
-        # Trier par Heat # et Lane
+        # Trier par Heat # et Lane (en gardant le texte original)
         group = group.sort_values(['Heat #', 'Lane'])
         
-        juge_stats = {j: {'heats': 0, 'last_heat': -99, 'consec': 0} for j in juges_dispo}
+        juge_stats = {j: {'heats': 0, 'last_heat': '', 'consec': 0} for j in juges_dispo}
         
         # Initialiser assigned pour chaque WOD
         assigned = set()
 
         for idx, row in group.iterrows():
-            # Récupérer le numéro de heat ORIGINAL depuis la ligne
+            # Récupérer le texte ORIGINAL du Heat # depuis la ligne
             original_heat = row['Heat #']
             
-            # DEBUG de chaque ligne
-            st.write(f"  🔍 Ligne {idx}: Heat # = {original_heat} (type: {type(original_heat)})")
-            
-            # Gérer différents types de données pour le heat
-            if pd.isna(original_heat):
-                heat_label = "Heat 0"
-            elif isinstance(original_heat, (int, float)):
-                heat_label = f"Heat {int(original_heat)}"
-            elif isinstance(original_heat, str):
-                # Essayer de convertir les strings en nombre
+            # Garder le texte original comme heat_label
+            heat_label = str(original_heat) if not pd.isna(original_heat) else "Heat 0"
+
+            # Pour la logique de rotation, on va extraire le numéro du heat si possible
+            heat_num = 0
+            if isinstance(original_heat, str) and 'Heat' in original_heat:
+                # Extraire le numéro du texte "Heat X"
                 try:
-                    heat_num = int(float(original_heat))
-                    heat_label = f"Heat {heat_num}"
+                    heat_num = int(original_heat.replace('Heat', '').strip())
                 except:
-                    heat_label = f"Heat {original_heat}"  # Garder la string originale
-            else:
-                heat_label = f"Heat {original_heat}"
+                    heat_num = 0
+            elif isinstance(original_heat, (int, float)):
+                heat_num = int(original_heat)
 
             # Trouver les juges disponibles
             dispo = [
                 j for j, s in juge_stats.items()
                 if j not in assigned
-                and (original_heat - s['last_heat']) > 0
-                and (s['consec'] < rotation or (original_heat - s['last_heat']) > rotation)
+                and (s['last_heat'] != original_heat)  # Éviter le même heat
+                and (s['consec'] < rotation)
             ]
             
             if not dispo:
                 dispo = [j for j in juges_dispo if j not in assigned]
             if not dispo:
                 dispo = juges_dispo.copy()
-                st.warning(f"⚠️ Pas assez de juges libres pour {wod} - Heat {original_heat}. Réaffectation forcée.")
+                st.warning(f"⚠️ Pas assez de juges libres pour {wod} - {heat_label}. Réaffectation forcée.")
 
             # Choisir le juge avec le moins d'assignations
             dispo.sort(key=lambda j: juge_stats[j]['heats'])
@@ -231,16 +213,19 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
                 'location': row.get('Workout Location', ''),
                 'start': row.get('Heat Start Time', ''),
                 'end': row.get('Heat End Time', ''),
-                'heat': heat_label
+                'heat': heat_label  # Utiliser le texte original
             })
 
             # Mettre à jour les statistiques du juge
             juge_stats[juge]['heats'] += 1
-            if isinstance(original_heat, (int, float)) and not pd.isna(original_heat):
-                juge_stats[juge]['consec'] = (
-                    juge_stats[juge]['consec'] + 1 if original_heat - juge_stats[juge]['last_heat'] == 1 else 1
-                )
-                juge_stats[juge]['last_heat'] = original_heat
+            
+            # Vérifier si heat consécutif
+            if juge_stats[juge]['last_heat'] == original_heat:
+                juge_stats[juge]['consec'] += 1
+            else:
+                juge_stats[juge]['consec'] = 1
+                
+            juge_stats[juge]['last_heat'] = original_heat
             assigned.add(juge)
 
     return planning
@@ -286,20 +271,12 @@ def main():
             schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
             schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
             
-            # Conversion robuste de Heat #
-            st.subheader("🔍 Debug - Conversion de la colonne Heat #")
-            st.write("Avant conversion:", schedule['Heat #'].head(10))
+            # NE PAS convertir Heat # - garder le texte original
+            st.subheader("Structure des données chargées")
+            st.write("Aperçu des données:")
+            st.dataframe(schedule[['Workout', 'Heat #', 'Lane', 'Competitor']].head())
             
-            # Essayer différentes méthodes de conversion
-            try:
-                schedule['Heat #'] = pd.to_numeric(schedule['Heat #'], errors='coerce').fillna(0).astype(int)
-            except Exception as e:
-                st.warning(f"Impossible de convertir Heat # en numérique: {e}")
-                # Garder les valeurs originales
-                schedule['Heat #'] = schedule['Heat #'].fillna(0)
-            
-            st.write("Après conversion:", schedule['Heat #'].head(10))
-            st.write("Valeurs uniques dans 'Heat #':", sorted(schedule['Heat #'].unique()))
+            st.write("Valeurs uniques dans 'Heat #':", schedule['Heat #'].unique())
             
             wods = sorted(schedule['Workout'].unique())
 
@@ -325,12 +302,12 @@ def main():
 
                 planning = assign_judges_equitable(schedule, judges, disponibilites, rotation)
 
-                # Vérification finale du planning généré
-                st.subheader("🔍 Vérification du planning généré")
+                # Vérification finale
+                st.subheader("Vérification du planning généré")
                 for juge, creneaux in planning.items():
                     if creneaux:
                         heats = [c['heat'] for c in creneaux]
-                        st.write(f"{juge}: {len(heats)} créneaux, Heats: {set(heats)}")
+                        st.write(f"{juge}: {len(creneaux)} créneaux, Heats: {set(heats)}")
 
                 # Générer les PDFs
                 pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
@@ -349,6 +326,16 @@ def main():
                     os.unlink(tmp2.name)
 
                 st.success("✅ Plannings générés avec succès !")
+
+                # Aperçu du planning
+                st.header("Aperçu des affectations")
+                for juge, creneaux in planning.items():
+                    if creneaux:
+                        with st.expander(f"{juge} ({len(creneaux)} créneaux)"):
+                            df_affectations = pd.DataFrame(creneaux)
+                            colonnes = ['wod', 'heat', 'lane', 'athlete', 'start', 'end']
+                            colonnes = [col for col in colonnes if col in df_affectations.columns]
+                            st.dataframe(df_affectations[colonnes])
 
         except Exception as e:
             st.error("Erreur lors du traitement :")
