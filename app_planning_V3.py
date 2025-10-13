@@ -73,12 +73,12 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
             start_str = start_time.strftime('%H:%M') if hasattr(start_time, 'strftime') else str(start_time)
             end_str = end_time.strftime('%H:%M') if hasattr(end_time, 'strftime') else str(end_time)
 
-            # 👉 On copie EXACTEMENT ce qui vient du tableau d’origine
+            # CORRECTION ICI : utiliser 'heat' au lieu de 'Heat #'
             data = [
                 f"{start_str} - {end_str}",
                 str(c.get('lane', '')),
                 str(c.get('wod', '')),
-                str(c.get('Heat #', '')),  # 💥 rien de plus !
+                str(c.get('heat', '')),  # ← CHANGEMENT ICI : 'heat' au lieu de 'Heat #'
                 str(c.get('athlete', '')),
                 str(c.get('division', ''))
             ]
