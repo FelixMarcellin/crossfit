@@ -67,24 +67,24 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         for i, c in enumerate(creneaux):
             pdf.set_fill_color(*row_colors[i % 2])
 
-            # Conversion propre des horaires
-            start_time = c['start'].strftime('%H:%M') if hasattr(c['start'], 'strftime') else str(c['start'])
-            end_time = c['end'].strftime('%H:%M') if hasattr(c['end'], 'strftime') else str(c['end'])
+            start_time = c.get('start')
+            end_time = c.get('end')
 
-            # 🔥 Ici : on recopie simplement la valeur du fichier d’origine
-            heat_value = c.get('Heat #', c.get('heat', ''))
+            start_str = start_time.strftime('%H:%M') if hasattr(start_time, 'strftime') else str(start_time)
+            end_str = end_time.strftime('%H:%M') if hasattr(end_time, 'strftime') else str(end_time)
 
+            # 👉 On copie EXACTEMENT ce qui vient du tableau d’origine
             data = [
-                f"{start_time} - {end_time}",
+                f"{start_str} - {end_str}",
                 str(c.get('lane', '')),
                 str(c.get('wod', '')),
-                str(heat_value),
+                str(c.get('Heat #', '')),  # 💥 rien de plus !
                 str(c.get('athlete', '')),
                 str(c.get('division', ''))
             ]
 
             for val, width in zip(data, col_widths):
-                pdf.cell(width, 10, str(val), border=1, align='C', fill=True)
+                pdf.cell(width, 10, val, border=1, align='C', fill=True)
             pdf.ln()
 
         pdf.ln(6)
@@ -93,6 +93,7 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         pdf.cell(0, 8, f"Total: {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
+
 
 
 
