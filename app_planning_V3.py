@@ -29,7 +29,7 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         if not creneaux:
             continue
 
-        # Trier les créneaux par WOD puis heure de début
+        # Trier les créneaux du juge par WOD puis heure de début
         def parse_time(x):
             if hasattr(x, 'strftime'):
                 return x
@@ -43,6 +43,7 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
         creneaux = sorted(creneaux, key=lambda c: (c.get('wod', ''), parse_time(c.get('start', ''))))
 
+        # ====== PAGE PAR JUGE ======
         pdf.add_page()
         pdf.set_font("Arial", 'B', 16)
         pdf.cell(0, 10, "Nom de la compétition", 0, 1, 'C')
@@ -51,8 +52,8 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         pdf.ln(10)
 
         # Colonnes simplifiées
-        col_widths = [35, 15, 25, 25, 60, 35]  # heure, lane, wod, heat, athlete, division
-        headers = ["Heure", "Lane", "WOD", "Heat", "Athlete", "Division"]
+        col_widths = [35, 15, 25, 15, 60, 35]
+        headers = ["Heure", "Lane", "WOD", "Heat #", "Athlete", "Division"]
 
         pdf.set_fill_color(211, 211, 211)
         pdf.set_font("Arial", 'B', 10)
@@ -65,30 +66,25 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
         for i, c in enumerate(creneaux):
             pdf.set_fill_color(*row_colors[i % 2])
-            start = c.get('start', '')
-            end = c.get('end', '')
 
-            start_time = start.strftime('%H:%M') if hasattr(start, 'strftime') else str(start)
-            end_time = end.strftime('%H:%M') if hasattr(end, 'strftime') else str(end)
+            # Conversion propre des horaires
+            start_time = c['start'].strftime('%H:%M') if hasattr(c['start'], 'strftime') else str(c['start'])
+            end_time = c['end'].strftime('%H:%M') if hasattr(c['end'], 'strftime') else str(c['end'])
 
-            # Afficher toujours "Heat X"
-            heat_label = c.get('heat', '')
-            if isinstance(heat_label, (int, float)) or str(heat_label).isdigit():
-                heat_label = f"Heat {int(float(heat_label))}"
-            elif isinstance(heat_label, str) and not heat_label.lower().startswith("heat"):
-                heat_label = f"Heat {heat_label}"
+            # 🔥 Ici : on recopie simplement la valeur du fichier d’origine
+            heat_value = c.get('Heat #', c.get('heat', ''))
 
             data = [
                 f"{start_time} - {end_time}",
                 str(c.get('lane', '')),
                 str(c.get('wod', '')),
-                heat_label,
+                str(heat_value),
                 str(c.get('athlete', '')),
                 str(c.get('division', ''))
             ]
 
             for val, width in zip(data, col_widths):
-                pdf.cell(width, 10, val, border=1, align='C', fill=True)
+                pdf.cell(width, 10, str(val), border=1, align='C', fill=True)
             pdf.ln()
 
         pdf.ln(6)
@@ -97,6 +93,7 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         pdf.cell(0, 8, f"Total: {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
+
 
 
 # ============================================================
