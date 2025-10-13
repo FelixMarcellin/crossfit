@@ -28,6 +28,17 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         if not creneaux:
             continue
 
+        # ✅ TRIER les créneaux du juge par heure de début
+        def parse_time(x):
+            if hasattr(x, 'strftime'):
+                return x
+            try:
+                return pd.to_datetime(x, format='%H:%M')
+            except Exception:
+                return pd.to_datetime(str(x))
+        creneaux = sorted(creneaux, key=lambda c: parse_time(c['start']))
+
+        # ====== PAGE PAR JUGE ======
         pdf.add_page()
         pdf.set_font("Arial", 'B', 16)
         pdf.cell(0, 10, "Nom de la compétition", 0, 1, 'C')
@@ -49,8 +60,8 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
         for i, c in enumerate(creneaux):
             pdf.set_fill_color(*row_colors[i % 2])
-            start_time = c['start'].strftime('%H:%M') if hasattr(c['start'], 'strftime') else c['start']
-            end_time = c['end'].strftime('%H:%M') if hasattr(c['end'], 'strftime') else c['end']
+            start_time = c['start'].strftime('%H:%M') if hasattr(c['start'], 'strftime') else str(c['start'])
+            end_time = c['end'].strftime('%H:%M') if hasattr(c['end'], 'strftime') else str(c['end'])
 
             data = [
                 f"{start_time} - {end_time}",
