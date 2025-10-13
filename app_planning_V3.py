@@ -73,12 +73,12 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
             start_str = start_time.strftime('%H:%M') if hasattr(start_time, 'strftime') else str(start_time)
             end_str = end_time.strftime('%H:%M') if hasattr(end_time, 'strftime') else str(end_time)
 
-            # CORRECTION ICI : utiliser 'heat' au lieu de 'Heat #'
+            # CORRECTION : utiliser 'heat' qui contient le label correct
             data = [
                 f"{start_str} - {end_str}",
                 str(c.get('lane', '')),
                 str(c.get('wod', '')),
-                str(c.get('heat', '')),  # ← CHANGEMENT ICI : 'heat' au lieu de 'Heat #'
+                str(c.get('heat', '')),  # ← CORRECTION ICI
                 str(c.get('athlete', '')),
                 str(c.get('division', ''))
             ]
@@ -93,8 +93,6 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         pdf.cell(0, 8, f"Total: {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
-
-
 
 
 # ============================================================
@@ -152,10 +150,18 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
 
 # ============================================================
-# ATTRIBUTION ÉQUITABLE DES JUGES
+# ATTRIBUTION ÉQUITABLE DES JUGES - VERSION CORRIGÉE
 # ============================================================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation):
     planning = {j: [] for j in judges}
+
+    # Vérification et nettoyage des données
+    schedule = schedule.copy()
+    schedule['Heat #'] = pd.to_numeric(schedule['Heat #'], errors='coerce').fillna(0).astype(int)
+    
+    # Nettoyer les noms d'athlètes
+    if 'Competitor' in schedule.columns:
+        schedule['Competitor'] = schedule['Competitor'].astype(str).str.strip()
 
     for wod, group in schedule.groupby('Workout'):
         juges_dispo = list(disponibilites[wod])
@@ -163,51 +169,54 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
             st.error(f"Aucun juge sélectionné pour {wod}")
             continue
 
-        group['Heat #'] = pd.to_numeric(group['Heat #'], errors='coerce').fillna(0).astype(int)
         group = group.sort_values(['Heat #', 'Lane'])
-        heats = sorted(group['Heat #'].unique())
-
         juge_stats = {j: {'heats': 0, 'last_heat': -99, 'consec': 0} for j in juges_dispo}
+        
+        # Initialiser assigned pour chaque WOD
+        assigned = set()
 
-        for heat in map(int, heats):
-            lines = group[group['Heat #'] == heat].sort_values('Lane')
-            assigned = set()
+        for _, row in group.iterrows():
+            # Récupérer le numéro de heat ORIGINAL depuis la ligne
+            original_heat = row['Heat #']
+            heat_label = f"Heat {int(original_heat)}"
 
-            for _, row in lines.iterrows():
-                dispo = [
-                    j for j, s in juge_stats.items()
-                    if j not in assigned
-                    and (heat - s['last_heat']) > 0
-                    and (s['consec'] < rotation or (heat - s['last_heat']) > rotation)
-                ]
-                if not dispo:
-                    dispo = [j for j in juges_dispo if j not in assigned]
-                if not dispo:
-                    dispo = juges_dispo.copy()
-                    st.warning(f"⚠️ Pas assez de juges libres pour {wod} - Heat {heat}. Réaffectation forcée.")
+            # Trouver les juges disponibles
+            dispo = [
+                j for j, s in juge_stats.items()
+                if j not in assigned
+                and (original_heat - s['last_heat']) > 0
+                and (s['consec'] < rotation or (original_heat - s['last_heat']) > rotation)
+            ]
+            
+            if not dispo:
+                dispo = [j for j in juges_dispo if j not in assigned]
+            if not dispo:
+                dispo = juges_dispo.copy()
+                st.warning(f"⚠️ Pas assez de juges libres pour {wod} - Heat {original_heat}. Réaffectation forcée.")
 
-                dispo.sort(key=lambda j: juge_stats[j]['heats'])
-                juge = dispo[0]
+            # Choisir le juge avec le moins d'assignations
+            dispo.sort(key=lambda j: juge_stats[j]['heats'])
+            juge = dispo[0]
 
-                heat_label = f"Heat {int(row['Heat #'])}" if pd.notna(row['Heat #']) else f"Heat {heat}"
+            # Ajouter au planning
+            planning[juge].append({
+                'wod': wod,
+                'lane': row.get('Lane', ''),
+                'athlete': row.get('Competitor', ''),
+                'division': row.get('Division', ''),
+                'location': row.get('Workout Location', ''),
+                'start': row.get('Heat Start Time', ''),
+                'end': row.get('Heat End Time', ''),
+                'heat': heat_label  # Utiliser le heat original du fichier
+            })
 
-                planning[juge].append({
-                    'wod': wod,
-                    'lane': row.get('Lane', ''),
-                    'athlete': row.get('Competitor', ''),
-                    'division': row.get('Division', ''),
-                    'location': row.get('Workout Location', ''),
-                    'start': row.get('Heat Start Time', ''),
-                    'end': row.get('Heat End Time', ''),
-                    'heat': heat_label
-                })
-
-                juge_stats[juge]['heats'] += 1
-                juge_stats[juge]['consec'] = (
-                    juge_stats[juge]['consec'] + 1 if heat - juge_stats[juge]['last_heat'] == 1 else 1
-                )
-                juge_stats[juge]['last_heat'] = heat
-                assigned.add(juge)
+            # Mettre à jour les statistiques du juge
+            juge_stats[juge]['heats'] += 1
+            juge_stats[juge]['consec'] = (
+                juge_stats[juge]['consec'] + 1 if original_heat - juge_stats[juge]['last_heat'] == 1 else 1
+            )
+            juge_stats[juge]['last_heat'] = original_heat
+            assigned.add(juge)
 
     return planning
 
@@ -239,17 +248,26 @@ def main():
     if schedule_file and judges:
         try:
             schedule = pd.read_excel(schedule_file, engine='openpyxl')
-            if 'Heat #' in schedule.columns:
-                schedule['Heat #'] = pd.to_numeric(schedule['Heat #'], errors='coerce').fillna(0).astype(int)
-
+            
+            # Vérification des colonnes requises
             required_columns = ['Workout', 'Lane', 'Competitor', 'Division', 'Workout Location',
                                 'Heat Start Time', 'Heat End Time', 'Heat #']
             if not all(col in schedule.columns for col in required_columns):
                 st.error("Erreur: Colonnes manquantes.")
+                st.write("Colonnes trouvées:", list(schedule.columns))
                 return
 
+            # Nettoyage des données
             schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
             schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
+            
+            # Aperçu des données
+            st.subheader("Aperçu des données chargées")
+            st.dataframe(schedule.head())
+            
+            # Vérification des heats
+            st.write("Valeurs uniques dans 'Heat #':", sorted(schedule['Heat #'].unique()))
+            
             wods = sorted(schedule['Workout'].unique())
 
             st.header("Disponibilité des Juges par WOD")
@@ -266,8 +284,15 @@ def main():
                         disponibilites[wod] = selected
 
             if st.button("Générer le planning"):
+                # Vérifier que tous les WODs ont au moins un juge
+                wods_sans_juge = [wod for wod, j in disponibilites.items() if not j]
+                if wods_sans_juge:
+                    st.error(f"Les WODs suivants n'ont aucun juge attribué: {', '.join(wods_sans_juge)}")
+                    return
+
                 planning = assign_judges_equitable(schedule, judges, disponibilites, rotation)
 
+                # Générer les PDFs
                 pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
                 pdf_heats = generate_heat_pdf({k: v for k, v in planning.items() if v})
 
@@ -289,7 +314,11 @@ def main():
                 for juge, c in planning.items():
                     if c:
                         with st.expander(f"{juge} ({len(c)} créneaux)"):
-                            st.table(pd.DataFrame(c))
+                            df_affectations = pd.DataFrame(c)
+                            # Réorganiser les colonnes pour une meilleure lisibilité
+                            colonnes = ['wod', 'heat', 'lane', 'athlete', 'division', 'start', 'end', 'location']
+                            colonnes = [col for col in colonnes if col in df_affectations.columns]
+                            st.dataframe(df_affectations[colonnes])
 
         except Exception as e:
             st.error("Erreur lors du traitement :")
