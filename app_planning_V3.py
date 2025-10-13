@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version : équitable + conversion automatique Heat #
+Version finale : équité, rotation, et affichage "Heat X"
 """
 
 import streamlit as st
@@ -17,8 +17,9 @@ import random
 st.set_page_config(page_title="Planning Juges by Crossfit Amiens 🦄", layout="wide")
 st.title("Planning Juges by Crossfit Amiens 🦄 Copyright © 2025 Felix Marcellin")
 
+
 # ============================================================
-# PDF Génération
+# PDF TABLEAU PAR JUGE
 # ============================================================
 def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     pdf = FPDF(orientation='P')
@@ -28,17 +29,20 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         if not creneaux:
             continue
 
-        # ✅ Trier les créneaux du juge par WOD puis heure de début
+        # Trier les créneaux par WOD puis heure de début
         def parse_time(x):
             if hasattr(x, 'strftime'):
                 return x
             try:
                 return pd.to_datetime(x, format='%H:%M')
             except Exception:
-                return pd.to_datetime(str(x), errors='coerce')
-        creneaux = sorted(creneaux, key=lambda c: (c['wod'], parse_time(c['start'])))
+                try:
+                    return pd.to_datetime(str(x))
+                except Exception:
+                    return pd.NaT
 
-        # ====== PAGE PAR JUGE ======
+        creneaux = sorted(creneaux, key=lambda c: (c.get('wod', ''), parse_time(c.get('start', ''))))
+
         pdf.add_page()
         pdf.set_font("Arial", 'B', 16)
         pdf.cell(0, 10, "Nom de la compétition", 0, 1, 'C')
@@ -46,9 +50,9 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         pdf.cell(0, 10, f"Planning: {juge}", 0, 1, 'C')
         pdf.ln(10)
 
-        # ✅ Colonnes simplifiées
-        col_widths = [35, 15, 25, 15, 60, 35]
-        headers = ["Heure", "Lane", "WOD", "Heat #", "Athlete", "Division"]
+        # Colonnes simplifiées
+        col_widths = [35, 15, 25, 25, 60, 35]  # heure, lane, wod, heat, athlete, division
+        headers = ["Heure", "Lane", "WOD", "Heat", "Athlete", "Division"]
 
         pdf.set_fill_color(211, 211, 211)
         pdf.set_font("Arial", 'B', 10)
@@ -61,38 +65,42 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
         for i, c in enumerate(creneaux):
             pdf.set_fill_color(*row_colors[i % 2])
+            start = c.get('start', '')
+            end = c.get('end', '')
 
-            start_time = c['start'].strftime('%H:%M') if hasattr(c['start'], 'strftime') else str(c['start'])
-            end_time = c['end'].strftime('%H:%M') if hasattr(c['end'], 'strftime') else str(c['end'])
+            start_time = start.strftime('%H:%M') if hasattr(start, 'strftime') else str(start)
+            end_time = end.strftime('%H:%M') if hasattr(end, 'strftime') else str(end)
 
-            # ✅ Correction : recherche Heat # dans plusieurs clés possibles
-            heat_num = c.get('heat') or c.get('Heat #') or ''
+            # Afficher toujours "Heat X"
+            heat_label = c.get('heat', '')
+            if isinstance(heat_label, (int, float)) or str(heat_label).isdigit():
+                heat_label = f"Heat {int(float(heat_label))}"
+            elif isinstance(heat_label, str) and not heat_label.lower().startswith("heat"):
+                heat_label = f"Heat {heat_label}"
 
             data = [
                 f"{start_time} - {end_time}",
-                str(c['lane']),
-                str(c['wod']),
-                str(heat_num),
-                str(c['athlete']),
-                str(c['division'])
+                str(c.get('lane', '')),
+                str(c.get('wod', '')),
+                heat_label,
+                str(c.get('athlete', '')),
+                str(c.get('division', ''))
             ]
 
             for val, width in zip(data, col_widths):
-                pdf.cell(width, 10, str(val), border=1, align='C', fill=True)
+                pdf.cell(width, 10, val, border=1, align='C', fill=True)
             pdf.ln()
 
-        pdf.ln(10)
-        pdf.set_font("Arial", 'I', 10)
-        total_wods = len({c['wod'] for c in creneaux})
+        pdf.ln(6)
+        pdf.set_font("Arial", 'I', 9)
+        total_wods = len({c.get('wod', '') for c in creneaux})
         pdf.cell(0, 8, f"Total: {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
 
 
-
-
 # ============================================================
-# PDF Heat Map
+# PDF PAR HEAT (carte globale)
 # ============================================================
 def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     heat_map = defaultdict(lambda: defaultdict(str))
@@ -125,7 +133,7 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
             pdf.set_font("Arial", 'B', 10)
             pdf.set_xy(x_position, 15)
-            pdf.cell(col_width, row_height, f"{wod} - Heat {heat}", border=1, align='C', fill=True)
+            pdf.cell(col_width, row_height, f"{wod} - {heat}", border=1, align='C', fill=True)
             pdf.set_font("Arial", '', 9)
             pdf.set_xy(x_position, 15 + row_height)
             pdf.cell(col_width, row_height, f"{start} - {end} @ {location}", border=1, align='C')
@@ -146,7 +154,7 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
 
 # ============================================================
-# LOGIQUE D’ATTRIBUTION ÉQUITABLE
+# ATTRIBUTION ÉQUITABLE DES JUGES
 # ============================================================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation):
     planning = {j: [] for j in judges}
@@ -157,7 +165,6 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
             st.error(f"Aucun juge sélectionné pour {wod}")
             continue
 
-        # Forcer la colonne Heat # en int
         group['Heat #'] = pd.to_numeric(group['Heat #'], errors='coerce').fillna(0).astype(int)
         group = group.sort_values(['Heat #', 'Lane'])
         heats = sorted(group['Heat #'].unique())
@@ -169,40 +176,34 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
             assigned = set()
 
             for _, row in lines.iterrows():
-                # Étape 1 : chercher juges respectant les contraintes
                 dispo = [
                     j for j, s in juge_stats.items()
                     if j not in assigned
                     and (heat - s['last_heat']) > 0
                     and (s['consec'] < rotation or (heat - s['last_heat']) > rotation)
                 ]
-
-                # Étape 2 : si aucun juge dispo selon les contraintes, assouplir
                 if not dispo:
                     dispo = [j for j in juges_dispo if j not in assigned]
-
-                # Étape 3 : si toujours rien (trop peu de juges), on réinitialise la rotation
                 if not dispo:
                     dispo = juges_dispo.copy()
                     st.warning(f"⚠️ Pas assez de juges libres pour {wod} - Heat {heat}. Réaffectation forcée.")
 
-                # Trier selon le nombre total de heats jugés (équité)
                 dispo.sort(key=lambda j: juge_stats[j]['heats'])
                 juge = dispo[0]
 
-                # Affecter le juge
+                heat_label = f"Heat {int(row['Heat #'])}" if pd.notna(row['Heat #']) else f"Heat {heat}"
+
                 planning[juge].append({
                     'wod': wod,
-                    'lane': row['Lane'],
-                    'athlete': row['Competitor'],
-                    'division': row['Division'],
-                    'location': row['Workout Location'],
-                    'start': row['Heat Start Time'],
-                    'end': row['Heat End Time'],
-                    'heat': row['Heat #']
+                    'lane': row.get('Lane', ''),
+                    'athlete': row.get('Competitor', ''),
+                    'division': row.get('Division', ''),
+                    'location': row.get('Workout Location', ''),
+                    'start': row.get('Heat Start Time', ''),
+                    'end': row.get('Heat End Time', ''),
+                    'heat': heat_label
                 })
 
-                # Mise à jour des stats
                 juge_stats[juge]['heats'] += 1
                 juge_stats[juge]['consec'] = (
                     juge_stats[juge]['consec'] + 1 if heat - juge_stats[juge]['last_heat'] == 1 else 1
@@ -240,8 +241,6 @@ def main():
     if schedule_file and judges:
         try:
             schedule = pd.read_excel(schedule_file, engine='openpyxl')
-
-            # Conversion Heat # dès lecture
             if 'Heat #' in schedule.columns:
                 schedule['Heat #'] = pd.to_numeric(schedule['Heat #'], errors='coerce').fillna(0).astype(int)
 
@@ -291,7 +290,7 @@ def main():
                 st.header("Récapitulatif des affectations")
                 for juge, c in planning.items():
                     if c:
-                        with st.expander(f"{juge} ({len(c)} heats)"):
+                        with st.expander(f"{juge} ({len(c)} créneaux)"):
                             st.table(pd.DataFrame(c))
 
         except Exception as e:
