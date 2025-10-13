@@ -28,15 +28,15 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         if not creneaux:
             continue
 
-        # ✅ TRIER les créneaux du juge par heure de début
+        # ✅ Trier les créneaux du juge par WOD puis heure de début
         def parse_time(x):
             if hasattr(x, 'strftime'):
                 return x
             try:
                 return pd.to_datetime(x, format='%H:%M')
             except Exception:
-                return pd.to_datetime(str(x))
-        creneaux = sorted(creneaux, key=lambda c: parse_time(c['start']))
+                return pd.to_datetime(str(x), errors='coerce')
+        creneaux = sorted(creneaux, key=lambda c: (c['wod'], parse_time(c['start'])))
 
         # ====== PAGE PAR JUGE ======
         pdf.add_page()
@@ -46,8 +46,9 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         pdf.cell(0, 10, f"Planning: {juge}", 0, 1, 'C')
         pdf.ln(10)
 
-        col_widths = [30, 10, 15, 50, 25, 40]
-        headers = ["Heure", "Lane", "WOD", "Athlete", "Division", "Emplacement"]
+        # ✅ Colonnes simplifiées
+        col_widths = [35, 15, 25, 15, 60, 35]
+        headers = ["Heure", "Lane", "WOD", "Heat #", "Athlete", "Division"]
 
         pdf.set_fill_color(211, 211, 211)
         pdf.set_font("Arial", 'B', 10)
@@ -66,10 +67,10 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
             data = [
                 f"{start_time} - {end_time}",
                 str(c['lane']),
-                c['wod'],
-                c['athlete'],
-                c['division'],
-                c['location']
+                str(c['wod']),
+                str(c.get('heat', '')),
+                str(c['athlete']),
+                str(c['division'])
             ]
 
             for val, width in zip(data, col_widths):
@@ -82,6 +83,7 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         pdf.cell(0, 8, f"Total: {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
+
 
 
 # ============================================================
