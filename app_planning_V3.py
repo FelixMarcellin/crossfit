@@ -73,12 +73,11 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
             start_str = start_time.strftime('%H:%M') if hasattr(start_time, 'strftime') else str(start_time)
             end_str = end_time.strftime('%H:%M') if hasattr(end_time, 'strftime') else str(end_time)
 
-            # CORRECTION : utiliser 'heat' qui contient le label correct
             data = [
                 f"{start_str} - {end_str}",
                 str(c.get('lane', '')),
                 str(c.get('wod', '')),
-                str(c.get('heat', '')),  # ← CORRECTION ICI
+                str(c.get('heat', '')),
                 str(c.get('athlete', '')),
                 str(c.get('division', ''))
             ]
@@ -150,18 +149,19 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
 
 # ============================================================
-# ATTRIBUTION ÉQUITABLE DES JUGES - VERSION CORRIGÉE
+# ATTRIBUTION ÉQUITABLE DES JUGES - VERSION DEBUG
 # ============================================================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation):
     planning = {j: [] for j in judges}
 
-    # Vérification et nettoyage des données
-    schedule = schedule.copy()
-    schedule['Heat #'] = pd.to_numeric(schedule['Heat #'], errors='coerce').fillna(0).astype(int)
+    # DEBUG: Afficher les premières lignes pour voir la structure
+    st.write("🔍 DEBUG - Structure des données:")
+    st.write("Colonnes:", list(schedule.columns))
+    st.write("Premières lignes:", schedule[['Workout', 'Heat #', 'Lane', 'Competitor']].head(10))
     
-    # Nettoyer les noms d'athlètes
-    if 'Competitor' in schedule.columns:
-        schedule['Competitor'] = schedule['Competitor'].astype(str).str.strip()
+    # Vérification spécifique de la colonne Heat #
+    st.write("🔍 DEBUG - Valeurs uniques de 'Heat #':", schedule['Heat #'].unique())
+    st.write("🔍 DEBUG - Types de 'Heat #':", schedule['Heat #'].apply(type).unique())
 
     for wod, group in schedule.groupby('Workout'):
         juges_dispo = list(disponibilites[wod])
@@ -169,16 +169,40 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
             st.error(f"Aucun juge sélectionné pour {wod}")
             continue
 
+        # DEBUG pour ce WOD
+        st.write(f"🔍 DEBUG - WOD {wod}:")
+        st.write(f"  Nombre de lignes: {len(group)}")
+        st.write(f"  Valeurs de 'Heat #' dans ce WOD: {group['Heat #'].unique()}")
+
+        # Trier par Heat # et Lane
         group = group.sort_values(['Heat #', 'Lane'])
+        
         juge_stats = {j: {'heats': 0, 'last_heat': -99, 'consec': 0} for j in juges_dispo}
         
         # Initialiser assigned pour chaque WOD
         assigned = set()
 
-        for _, row in group.iterrows():
+        for idx, row in group.iterrows():
             # Récupérer le numéro de heat ORIGINAL depuis la ligne
             original_heat = row['Heat #']
-            heat_label = f"Heat {int(original_heat)}"
+            
+            # DEBUG de chaque ligne
+            st.write(f"  🔍 Ligne {idx}: Heat # = {original_heat} (type: {type(original_heat)})")
+            
+            # Gérer différents types de données pour le heat
+            if pd.isna(original_heat):
+                heat_label = "Heat 0"
+            elif isinstance(original_heat, (int, float)):
+                heat_label = f"Heat {int(original_heat)}"
+            elif isinstance(original_heat, str):
+                # Essayer de convertir les strings en nombre
+                try:
+                    heat_num = int(float(original_heat))
+                    heat_label = f"Heat {heat_num}"
+                except:
+                    heat_label = f"Heat {original_heat}"  # Garder la string originale
+            else:
+                heat_label = f"Heat {original_heat}"
 
             # Trouver les juges disponibles
             dispo = [
@@ -207,15 +231,16 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
                 'location': row.get('Workout Location', ''),
                 'start': row.get('Heat Start Time', ''),
                 'end': row.get('Heat End Time', ''),
-                'heat': heat_label  # Utiliser le heat original du fichier
+                'heat': heat_label
             })
 
             # Mettre à jour les statistiques du juge
             juge_stats[juge]['heats'] += 1
-            juge_stats[juge]['consec'] = (
-                juge_stats[juge]['consec'] + 1 if original_heat - juge_stats[juge]['last_heat'] == 1 else 1
-            )
-            juge_stats[juge]['last_heat'] = original_heat
+            if isinstance(original_heat, (int, float)) and not pd.isna(original_heat):
+                juge_stats[juge]['consec'] = (
+                    juge_stats[juge]['consec'] + 1 if original_heat - juge_stats[juge]['last_heat'] == 1 else 1
+                )
+                juge_stats[juge]['last_heat'] = original_heat
             assigned.add(juge)
 
     return planning
@@ -261,11 +286,19 @@ def main():
             schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
             schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
             
-            # Aperçu des données
-            st.subheader("Aperçu des données chargées")
-            st.dataframe(schedule.head())
+            # Conversion robuste de Heat #
+            st.subheader("🔍 Debug - Conversion de la colonne Heat #")
+            st.write("Avant conversion:", schedule['Heat #'].head(10))
             
-            # Vérification des heats
+            # Essayer différentes méthodes de conversion
+            try:
+                schedule['Heat #'] = pd.to_numeric(schedule['Heat #'], errors='coerce').fillna(0).astype(int)
+            except Exception as e:
+                st.warning(f"Impossible de convertir Heat # en numérique: {e}")
+                # Garder les valeurs originales
+                schedule['Heat #'] = schedule['Heat #'].fillna(0)
+            
+            st.write("Après conversion:", schedule['Heat #'].head(10))
             st.write("Valeurs uniques dans 'Heat #':", sorted(schedule['Heat #'].unique()))
             
             wods = sorted(schedule['Workout'].unique())
@@ -292,6 +325,13 @@ def main():
 
                 planning = assign_judges_equitable(schedule, judges, disponibilites, rotation)
 
+                # Vérification finale du planning généré
+                st.subheader("🔍 Vérification du planning généré")
+                for juge, creneaux in planning.items():
+                    if creneaux:
+                        heats = [c['heat'] for c in creneaux]
+                        st.write(f"{juge}: {len(heats)} créneaux, Heats: {set(heats)}")
+
                 # Générer les PDFs
                 pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
                 pdf_heats = generate_heat_pdf({k: v for k, v in planning.items() if v})
@@ -309,16 +349,6 @@ def main():
                     os.unlink(tmp2.name)
 
                 st.success("✅ Plannings générés avec succès !")
-
-                st.header("Récapitulatif des affectations")
-                for juge, c in planning.items():
-                    if c:
-                        with st.expander(f"{juge} ({len(c)} créneaux)"):
-                            df_affectations = pd.DataFrame(c)
-                            # Réorganiser les colonnes pour une meilleure lisibilité
-                            colonnes = ['wod', 'heat', 'lane', 'athlete', 'division', 'start', 'end', 'location']
-                            colonnes = [col for col in colonnes if col in df_affectations.columns]
-                            st.dataframe(df_affectations[colonnes])
 
         except Exception as e:
             st.error("Erreur lors du traitement :")
