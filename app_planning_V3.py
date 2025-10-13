@@ -61,14 +61,18 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
         for i, c in enumerate(creneaux):
             pdf.set_fill_color(*row_colors[i % 2])
+
             start_time = c['start'].strftime('%H:%M') if hasattr(c['start'], 'strftime') else str(c['start'])
             end_time = c['end'].strftime('%H:%M') if hasattr(c['end'], 'strftime') else str(c['end'])
+
+            # ✅ Correction : recherche Heat # dans plusieurs clés possibles
+            heat_num = c.get('heat') or c.get('Heat #') or ''
 
             data = [
                 f"{start_time} - {end_time}",
                 str(c['lane']),
                 str(c['wod']),
-                str(c.get('heat', '')),
+                str(heat_num),
                 str(c['athlete']),
                 str(c['division'])
             ]
@@ -83,6 +87,7 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         pdf.cell(0, 8, f"Total: {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
+
 
 
 
