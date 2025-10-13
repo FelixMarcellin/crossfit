@@ -252,10 +252,11 @@ def _assign_consecutive_mode_full(group, heat_numbers, juges_dispo, planning, wo
                         current_counts[juge] <= cible_par_juge + 2):
                         
                         # Vérifier que le juge n'est pas déjà sur un de ces heats
-                        deja_sur_heat = any(
-                            any(c['heat_num'] in [current_heat, next_heat] 
-                            for c in temp_planning[juge])
-                        )
+                        deja_sur_heat = False
+                        for c in temp_planning[juge]:
+                            if c['heat_num'] in [current_heat, next_heat]:
+                                deja_sur_heat = True
+                                break
                         
                         if not deja_sur_heat:
                             juge_candidat = juge
@@ -277,9 +278,11 @@ def _assign_consecutive_mode_full(group, heat_numbers, juges_dispo, planning, wo
                             'heat': ligne['Heat #'],
                             'heat_num': current_heat
                         })
-                        current_heat_lines = current_heat_lines.iloc[1:]
+                        # Mettre à jour le groupe en enlevant la ligne attribuée
+                        group = group.drop(ligne.name)
                     
                     # Heat suivant
+                    next_heat_lines = group[group['heat_num'] == next_heat]
                     if len(next_heat_lines) > 0:
                         ligne = next_heat_lines.iloc[0]
                         temp_planning[juge_candidat].append({
@@ -293,41 +296,37 @@ def _assign_consecutive_mode_full(group, heat_numbers, juges_dispo, planning, wo
                             'heat': ligne['Heat #'],
                             'heat_num': next_heat
                         })
-                        next_heat_lines = next_heat_lines.iloc[1:]
+                        # Mettre à jour le groupe en enlevant la ligne attribuée
+                        group = group.drop(ligne.name)
                     
                     used_heats.add(current_heat)
                     used_heats.add(next_heat)
                     current_counts[juge_candidat] += 2
     
-    # Étape 2: Assigner les lignes restantes
-    remaining_heats = [hn for hn in heat_numbers if hn not in used_heats]
-    
-    for heat_num in remaining_heats:
-        heat_lines = group[group['heat_num'] == heat_num]
+    # Étape 2: Assigner les lignes restantes une par une
+    for _, ligne in group.iterrows():
+        # Trouver le juge le plus sous-chargé disponible
+        juge_candidat = None
+        min_count = float('inf')
         
-        for _, ligne in heat_lines.iterrows():
-            # Trouver le juge le plus sous-chargé disponible
-            juge_candidat = None
-            min_count = float('inf')
-            
-            for juge in juges_dispo:
-                if current_counts[juge] < min_count:
-                    juge_candidat = juge
-                    min_count = current_counts[juge]
-            
-            if juge_candidat:
-                temp_planning[juge_candidat].append({
-                    'wod': wod,
-                    'lane': ligne['Lane'],
-                    'athlete': ligne['Competitor'],
-                    'division': ligne['Division'],
-                    'location': ligne['Workout Location'],
-                    'start': ligne['Heat Start Time'],
-                    'end': ligne['Heat End Time'],
-                    'heat': ligne['Heat #'],
-                    'heat_num': heat_num
-                })
-                current_counts[juge_candidat] += 1
+        for juge in juges_dispo:
+            if current_counts[juge] < min_count:
+                juge_candidat = juge
+                min_count = current_counts[juge]
+        
+        if juge_candidat:
+            temp_planning[juge_candidat].append({
+                'wod': wod,
+                'lane': ligne['Lane'],
+                'athlete': ligne['Competitor'],
+                'division': ligne['Division'],
+                'location': ligne['Workout Location'],
+                'start': ligne['Heat Start Time'],
+                'end': ligne['Heat End Time'],
+                'heat': ligne['Heat #'],
+                'heat_num': ligne['heat_num']
+            })
+            current_counts[juge_candidat] += 1
     
     # Fusionner le planning temporaire dans le planning principal
     for juge, creneaux in temp_planning.items():
@@ -389,15 +388,16 @@ def _balance_assignments(planning, judges, cible_par_juge, tolerance):
                     transfer_count = min(excès, manque)
                     
                     # Trouver des créneaux à transférer (les derniers ajoutés)
-                    creneaux_a_transferer = planning[juge_surcharge][-transfer_count:]
-                    
-                    # Effectuer le transfert
-                    for creneau in creneaux_a_transferer:
-                        planning[juge_surcharge].remove(creneau)
-                        planning[juge_sous_charge].append(creneau)
-                    
-                    excès -= transfer_count
-                    manque -= transfer_count
+                    if len(planning[juge_surcharge]) >= transfer_count:
+                        creneaux_a_transferer = planning[juge_surcharge][-transfer_count:]
+                        
+                        # Effectuer le transfert
+                        for creneau in creneaux_a_transferer:
+                            planning[juge_surcharge].remove(creneau)
+                            planning[juge_sous_charge].append(creneau)
+                        
+                        excès -= transfer_count
+                        manque -= transfer_count
                     
                     if excès <= 0:
                         break
@@ -504,6 +504,7 @@ def main():
                     
                     if rotation == 2:
                         st.write("**Séquences consécutives détectées:**")
+                        sequences_trouvees = False
                         for juge, creneaux in planning.items():
                             if creneaux:
                                 sequences = []
@@ -514,6 +515,9 @@ def main():
                                         sequences.append(f"{creneaux_tries[i]['heat']}→{creneaux_tries[i+1]['heat']}")
                                 if sequences:
                                     st.write(f"{juge}: {', '.join(sequences[:3])}")  # Afficher max 3 séquences
+                                    sequences_trouvees = True
+                        if not sequences_trouvees:
+                            st.write("Aucune séquence consécutive détectée")
 
                 # Générer les PDFs
                 pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
