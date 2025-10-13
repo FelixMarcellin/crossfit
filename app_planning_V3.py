@@ -1,12 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-Created on Mon Oct 13 16:05:04 2025
-
-@author: felima
-"""
-
-# -*- coding: utf-8 -*-
-"""
 Planning Juges équilibré - Crossfit Amiens
 Version finale : équité, rotation, et affichage "Heat X"
 """
@@ -177,21 +170,26 @@ def extract_heat_number(heat_str):
 
 
 # ============================================================
-# ATTRIBUTION ÉQUITABLE DES JUGES - VERSION CORRIGÉE AVEC ROTATION
+# ATTRIBUTION ÉQUITABLE DES JUGES - VERSION STRICTE
 # ============================================================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation):
     planning = {j: [] for j in judges}
-
+    
     # Préparer les données avec les numéros de heat
     schedule_with_heat_nums = schedule.copy()
     schedule_with_heat_nums['heat_num'] = schedule_with_heat_nums['Heat #'].apply(extract_heat_number)
     
-    # Créer un mapping heat_text -> heat_num pour chaque WOD
-    heat_mapping = {}
+    # Calculer le nombre total de créneaux par WOD
+    total_creneaux_par_wod = {}
     for wod, group in schedule_with_heat_nums.groupby('Workout'):
-        heat_mapping[wod] = {}
-        for _, row in group.iterrows():
-            heat_mapping[wod][row['Heat #']] = row['heat_num']
+        total_creneaux_par_wod[wod] = len(group)
+    
+    # Calculer le nombre cible de créneaux par juge
+    total_creneaux = sum(total_creneaux_par_wod.values())
+    cible_par_juge = total_creneaux // len(judges)
+    tolerance = 2  # ±2 créneaux
+    
+    st.write(f"🎯 Cible: {cible_par_juge} créneaux par juge (tolérance: ±{tolerance})")
 
     for wod, group in schedule_with_heat_nums.groupby('Workout'):
         juges_dispo = list(disponibilites[wod])
@@ -199,119 +197,192 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
             st.error(f"Aucun juge sélectionné pour {wod}")
             continue
 
-        # Trier par numéro de heat et lane
-        group = group.sort_values(['heat_num', 'Lane'])
+        # Trier par numéro de heat
+        group = group.sort_values('heat_num')
         
-        # Initialiser les stats des juges
-        juge_stats = {j: {
-            'heats': 0, 
-            'last_heat_num': -1, 
-            'consecutive_count': 0,
-            'assigned_heats': set()
-        } for j in juges_dispo}
+        # Grouper par heat num
+        heats_par_num = {}
+        for heat_num, heat_group in group.groupby('heat_num'):
+            heats_par_num[heat_num] = heat_group
+        
+        # Pour rotation=2, essayer de créer des paires de heats consécutifs
+        if rotation == 2:
+            _assign_with_consecutive_heats(heats_par_num, juges_dispo, planning, wod, judges, cible_par_juge, tolerance)
+        else:
+            # Pour rotation=1, attribution normale
+            _assign_without_consecutive(heats_par_num, juges_dispo, planning, wod)
 
-        # Traiter les heats dans l'ordre
-        current_heat_num = -1
-        current_heat_group = []
-        
-        for idx, row in group.iterrows():
-            heat_text = row['Heat #']
-            heat_num = row['heat_num']
-            
-            # Si on change de heat num, traiter le groupe précédent
-            if heat_num != current_heat_num and current_heat_group:
-                # Attribuer les juges pour le heat précédent
-                _assign_judes_to_heat_group(current_heat_group, juge_stats, juges_dispo, rotation, planning)
-                current_heat_group = []
-            
-            current_heat_num = heat_num
-            current_heat_group.append((idx, row))
-        
-        # Traiter le dernier groupe
-        if current_heat_group:
-            _assign_judes_to_heat_group(current_heat_group, juge_stats, juges_dispo, rotation, planning)
-
+    # Équilibrer le nombre total de créneaux par juge
+    _balance_total_assignments(planning, judges, cible_par_juge, tolerance, schedule_with_heat_nums, disponibilites)
+    
     return planning
 
 
-def _assign_judes_to_heat_group(heat_group, juge_stats, juges_dispo, rotation, planning):
-    """Attribue les juges pour un groupe de lignes du même heat"""
-    # Trier les juges par nombre d'assignations (pour l'équité)
-    juges_tries = sorted(juges_dispo, key=lambda j: juge_stats[j]['heats'])
+def _assign_with_consecutive_heats(heats_par_num, juges_dispo, planning, wod, judges, cible_par_juge, tolerance):
+    """Attribution avec priorité aux paires de heats consécutifs"""
+    heat_nums = sorted(heats_par_num.keys())
     
-    assigned_judges = set()
+    # Compter les créneaux actuels par juge
+    current_counts = {j: len(planning[j]) for j in judges}
     
-    for idx, row in heat_group:
-        heat_text = row['Heat #']
-        heat_num = row['heat_num']
+    # Essayer de former des paires de heats consécutifs
+    used_heats = set()
+    
+    for i in range(len(heat_nums) - 1):
+        current_heat = heat_nums[i]
+        next_heat = heat_nums[i + 1]
         
-        # Trouver les juges disponibles pour ce heat
-        available_judges = []
-        
-        for juge in juges_tries:
-            if juge in assigned_judges:
-                continue
+        # Vérifier si c'est une paire consécutive
+        if next_heat - current_heat == 1:
+            # Vérifier si ces heats ne sont pas déjà attribués
+            if current_heat not in used_heats and next_heat not in used_heats:
+                # Trouver le juge le plus sous-chargé qui peut prendre les 2 heats
+                juge_candidat = None
+                min_count = float('inf')
                 
-            stats = juge_stats[juge]
-            
-            # Vérifier si le juge peut prendre ce heat selon la rotation
-            can_assign = True
-            
-            if rotation == 1:
-                # Rotation 1: pas de heats consécutifs
-                if stats['last_heat_num'] != -1 and heat_num - stats['last_heat_num'] == 1:
-                    can_assign = False
-            elif rotation == 2:
-                # Rotation 2: max 2 heats consécutifs, puis 2 heats de repos
-                if stats['last_heat_num'] != -1:
-                    gap = heat_num - stats['last_heat_num']
-                    if gap == 1:  # Heat consécutif
-                        if stats['consecutive_count'] >= 2:
+                for juge in juges_dispo:
+                    if current_counts[juge] < min_count and current_counts[juge] <= cible_par_juge + tolerance:
+                        # Vérifier que le juge n'est pas déjà sur un de ces heats
+                        juge_already_assigned = any(
+                            c['heat'] in [str(heats_par_num[current_heat].iloc[0]['Heat #']), 
+                            str(heats_par_num[next_heat].iloc[0]['Heat #'])] 
+                            for c in planning[juge]
+                        )
+                        if not juge_already_assigned:
+                            juge_candidat = juge
+                            min_count = current_counts[juge]
+                
+                if juge_candidat:
+                    # Attribuer les 2 heats consécutifs au même juge
+                    for heat_num in [current_heat, next_heat]:
+                        heat_group = heats_par_num[heat_num]
+                        for _, row in heat_group.iterrows():
+                            planning[juge_candidat].append({
+                                'wod': wod,
+                                'lane': row.get('Lane', ''),
+                                'athlete': row.get('Competitor', ''),
+                                'division': row.get('Division', ''),
+                                'location': row.get('Workout Location', ''),
+                                'start': row.get('Heat Start Time', ''),
+                                'end': row.get('Heat End Time', ''),
+                                'heat': row['Heat #']
+                            })
+                            current_counts[juge_candidat] += 1
+                    
+                    used_heats.add(current_heat)
+                    used_heats.add(next_heat)
+    
+    # Attribuer les heats restants (ceux qui n'ont pas pu être mis en paires)
+    remaining_heat_nums = [hn for hn in heat_nums if hn not in used_heats]
+    
+    for heat_num in remaining_heat_nums:
+        heat_group = heats_par_num[heat_num]
+        
+        # Trouver le juge le plus sous-chargé
+        juge_candidat = None
+        min_count = float('inf')
+        
+        for juge in juges_dispo:
+            if current_counts[juge] < min_count and current_counts[juge] <= cible_par_juge + tolerance:
+                # Vérifier que le juge n'est pas déjà sur ce heat
+                juge_already_assigned = any(
+                    c['heat'] == str(heat_group.iloc[0]['Heat #']) 
+                    for c in planning[juge]
+                )
+                if not juge_already_assigned:
+                    juge_candidat = juge
+                    min_count = current_counts[juge]
+        
+        if juge_candidat:
+            for _, row in heat_group.iterrows():
+                planning[juge_candidat].append({
+                    'wod': wod,
+                    'lane': row.get('Lane', ''),
+                    'athlete': row.get('Competitor', ''),
+                    'division': row.get('Division', ''),
+                    'location': row.get('Workout Location', ''),
+                    'start': row.get('Heat Start Time', ''),
+                    'end': row.get('Heat End Time', ''),
+                    'heat': row['Heat #']
+                })
+                current_counts[juge_candidat] += 1
+
+
+def _assign_without_consecutive(heats_par_num, juges_dispo, planning, wod):
+    """Attribution sans heats consécutifs"""
+    heat_nums = sorted(heats_par_num.keys())
+    
+    for heat_num in heat_nums:
+        heat_group = heats_par_num[heat_num]
+        
+        # Compter les créneaux actuels par juge pour ce WOD
+        counts_this_wod = {j: sum(1 for c in planning[j] if c['wod'] == wod) for j in juges_dispo}
+        
+        # Trier les juges par nombre d'assignations (le moins chargé d'abord)
+        juges_tries = sorted(juges_dispo, key=lambda j: (counts_this_wod[j], len(planning[j])))
+        
+        assigned_judges = set()
+        
+        for _, row in heat_group.iterrows():
+            # Trouver le juge disponible le moins chargé
+            for juge in juges_tries:
+                if juge not in assigned_judges:
+                    # Vérifier que le juge n'a pas fait le heat précédent
+                    can_assign = True
+                    if heat_num > min(heat_nums):
+                        previous_heat = heat_num - 1
+                        if any(c['heat'] == str(heats_par_num[previous_heat].iloc[0]['Heat #']) for c in planning[juge] if c['wod'] == wod):
                             can_assign = False
-                    elif gap == 2:  # 1 heat de repos
-                        if stats['consecutive_count'] >= 2:
-                            can_assign = False
-                    # Pour gap >= 3, toujours autorisé
-            
-            if can_assign:
-                available_judges.append(juge)
+                    
+                    if can_assign:
+                        planning[juge].append({
+                            'wod': wod,
+                            'lane': row.get('Lane', ''),
+                            'athlete': row.get('Competitor', ''),
+                            'division': row.get('Division', ''),
+                            'location': row.get('Workout Location', ''),
+                            'start': row.get('Heat Start Time', ''),
+                            'end': row.get('Heat End Time', ''),
+                            'heat': row['Heat #']
+                        })
+                        assigned_judges.add(juge)
+                        break
+
+
+def _balance_total_assignments(planning, judges, cible_par_juge, tolerance, schedule, disponibilites):
+    """Équilibrer le nombre total de créneaux par juge"""
+    current_counts = {j: len(planning[j]) for j in judges}
+    
+    # Identifier les juges sur-chargés et sous-chargés
+    surcharges = {j: count - cible_par_juge for j, count in current_counts.items() if count > cible_par_juge + tolerance}
+    sous_charges = {j: cible_par_juge - count for j, count in current_counts.items() if count < cible_par_juge - tolerance}
+    
+    if surcharges or sous_charges:
+        st.warning("🔧 Rééquilibrage des assignations en cours...")
         
-        # Si pas de juges disponibles avec les contraintes, relâcher les contraintes
-        if not available_judges:
-            available_judges = [j for j in juges_tries if j not in assigned_judges]
-        
-        # Si toujours pas, prendre n'importe quel juge
-        if not available_judges:
-            available_judges = juges_dispo.copy()
-        
-        # Choisir le juge avec le moins d'assignations
-        available_judges.sort(key=lambda j: juge_stats[j]['heats'])
-        juge_choisi = available_judges[0]
-        
-        # Mettre à jour les stats
-        stats = juge_stats[juge_choisi]
-        if stats['last_heat_num'] != -1 and heat_num - stats['last_heat_num'] == 1:
-            stats['consecutive_count'] += 1
-        else:
-            stats['consecutive_count'] = 1
-            
-        stats['last_heat_num'] = heat_num
-        stats['heats'] += 1
-        stats['assigned_heats'].add(heat_num)
-        
-        assigned_judges.add(juge_choisi)
-        
-        # Ajouter au planning
-        planning[juge_choisi].append({
-            'wod': row['Workout'],
-            'lane': row.get('Lane', ''),
-            'athlete': row.get('Competitor', ''),
-            'division': row.get('Division', ''),
-            'location': row.get('Workout Location', ''),
-            'start': row.get('Heat Start Time', ''),
-            'end': row.get('Heat End Time', ''),
-            'heat': heat_text
-        })
+        # Rééquilibrer en transférant des créneaux des surchargés vers les sous-chargés
+        for juge_surcharge, excès in surcharges.items():
+            for juge_sous_charge, manque in sous_charges.items():
+                if excès > 0 and manque > 0:
+                    # Trouver des créneaux à transférer
+                    creneaux_a_transferer = []
+                    for creneau in planning[juge_surcharge]:
+                        # Vérifier si le juge sous-chargé est disponible pour ce WOD
+                        wod = creneau['wod']
+                        if juge_sous_charge in disponibilites[wod]:
+                            creneaux_a_transferer.append(creneau)
+                            if len(creneaux_a_transferer) >= min(excès, manque):
+                                break
+                    
+                    # Effectuer le transfert
+                    for creneau in creneaux_a_transferer:
+                        planning[juge_surcharge].remove(creneau)
+                        planning[juge_sous_charge].append(creneau)
+                        excès -= 1
+                        manque -= 1
+                        
+                    if excès <= 0:
+                        break
 
 
 # ============================================================
@@ -337,15 +408,17 @@ def main():
                 st.write(judges)
 
         st.header("Paramètres de rotation")
-        rotation = st.radio("Nombre de heats consécutifs par juge", 
+        rotation = st.radio("Mode d'attribution", 
                            options=[1, 2], 
                            index=1,
-                           help="1 = pas de heats consécutifs, 2 = max 2 heats consécutifs puis repos")
+                           format_func=lambda x: "1 heat consécutif max" if x == 1 else "2 heats consécutifs obligatoires",
+                           help="2 heats consécutifs: Les juges font obligatoirement 2 heats de suite quand possible")
         
         st.info("""
-        **Explication de la rotation:**
-        - **1 heat consécutif**: Les juges ne font jamais 2 heats de suite
-        - **2 heats consécutifs**: Les juges peuvent faire max 2 heats de suite, puis au moins 2 heats de repos
+        **Mode 2 heats consécutifs:**
+        - Les juges font OBLIGATOIREMENT 2 heats de suite quand c'est possible
+        - Si impossible, ils peuvent faire 1 ou 3 heats
+        - Répartition équitable du nombre total de heats par juge (±2)
         """)
 
     if schedule_file and judges:
@@ -369,9 +442,9 @@ def main():
             st.write("Aperçu des données:")
             st.dataframe(schedule[['Workout', 'Heat #', 'Lane', 'Competitor']].head())
             
-            # Extraire les numéros de heat pour debug
-            schedule['heat_num_debug'] = schedule['Heat #'].apply(extract_heat_number)
-            st.write("Numéros de heat extraits:", sorted(schedule['heat_num_debug'].unique()))
+            # Extraire les numéros de heat
+            schedule['heat_num'] = schedule['Heat #'].apply(extract_heat_number)
+            st.write("Numéros de heat extraits:", sorted(schedule['heat_num'].unique()))
             
             wods = sorted(schedule['Workout'].unique())
 
@@ -397,37 +470,48 @@ def main():
 
                 planning = assign_judges_equitable(schedule, judges, disponibilites, rotation)
 
-                # Vérification finale avec analyse de la rotation
-                st.subheader("Analyse de la rotation des juges")
-                for juge, creneaux in planning.items():
-                    if creneaux:
-                        # Trier par WOD et numéro de heat
-                        creneaux_sorted = sorted(creneaux, key=lambda x: (x['wod'], extract_heat_number(x['heat'])))
-                        heats_by_wod = {}
-                        for c in creneaux_sorted:
-                            wod = c['wod']
-                            heat_num = extract_heat_number(c['heat'])
-                            if wod not in heats_by_wod:
-                                heats_by_wod[wod] = []
-                            heats_by_wod[wod].append(heat_num)
-                        
-                        # Analyser les séquences consécutives
-                        consecutive_analysis = []
-                        for wod, heat_nums in heats_by_wod.items():
-                            if len(heat_nums) > 1:
-                                consecutive_count = 1
-                                for i in range(1, len(heat_nums)):
-                                    if heat_nums[i] - heat_nums[i-1] == 1:
-                                        consecutive_count += 1
-                                    else:
-                                        if consecutive_count > 1:
-                                            consecutive_analysis.append(f"{wod}: {consecutive_count} heats consécutifs")
-                                        consecutive_count = 1
-                                if consecutive_count > 1:
-                                    consecutive_analysis.append(f"{wod}: {consecutive_count} heats consécutifs")
-                        
-                        analysis_text = " | ".join(consecutive_analysis) if consecutive_analysis else "Aucune séquence consécutive"
-                        st.write(f"**{juge}** ({len(creneaux)} créneaux): {analysis_text}")
+                # Analyse détaillée des résultats
+                st.subheader("📊 Analyse détaillée des assignations")
+                
+                # Nombre total de créneaux par juge
+                total_par_juge = {j: len(creneaux) for j, creneaux in planning.items()}
+                total_creneaux = sum(total_par_juge.values())
+                cible_par_juge = total_creneaux // len(judges)
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.write("**Répartition par juge:**")
+                    for juge, count in sorted(total_par_juge.items(), key=lambda x: x[1], reverse=True):
+                        ecart = count - cible_par_juge
+                        statut = "✅" if abs(ecart) <= 2 else "⚠️"
+                        st.write(f"{statut} {juge}: {count} créneaux ({ecart:+d})")
+                
+                with col2:
+                    st.write("**Séquences consécutives:**")
+                    for juge, creneaux in planning.items():
+                        if creneaux:
+                            # Analyser les séquences par WOD
+                            sequences = []
+                            for wod in set(c['wod'] for c in creneaux):
+                                heats_wod = sorted([extract_heat_number(c['heat']) for c in creneaux if c['wod'] == wod])
+                                if len(heats_wod) > 1:
+                                    consecutive = 1
+                                    for i in range(1, len(heats_wod)):
+                                        if heats_wod[i] - heats_wod[i-1] == 1:
+                                            consecutive += 1
+                                    if consecutive > 1:
+                                        sequences.append(f"{wod}:{consecutive}")
+                            
+                            if sequences:
+                                st.write(f"**{juge}:** {', '.join(sequences)}")
+                
+                with col3:
+                    st.write("**Statistiques globales:**")
+                    st.write(f"Total créneaux: {total_creneaux}")
+                    st.write(f"Cible par juge: {cible_par_juge}")
+                    st.write(f"Juges utilisés: {sum(1 for j in judges if planning[j])}/{len(judges)}")
+                    st.write(f"Écart max: {max(total_par_juge.values()) - min(total_par_juge.values())}")
 
                 # Générer les PDFs
                 pdf_juges = generate_pdf_tableau({k: v for k, v in planning.items() if v})
