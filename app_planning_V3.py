@@ -89,7 +89,7 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
 # PDF PAR HEAT (corrigé)
 # ========================
 def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
-    """Génère le PDF par heat (corrigé : plus de bloc noir, fond blanc propre)"""
+    """Génère le PDF par heat (corrigé : position Y gérée correctement)"""
     heat_map = defaultdict(lambda: defaultdict(str))
     for juge, creneaux in planning.items():
         for c in creneaux:
@@ -120,31 +120,29 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
 
             (wod, heat, start, end, loc), lanes = heats[i + j]
             x = 10 + j * (col_width + spacing)
-
-            # 🔧 S'assurer que le fond est bien blanc avant d’écrire
-            pdf.set_fill_color(255, 255, 255)
+            y_start = 25  # Position Y de départ pour ce bloc
 
             # En-tête du bloc heat : WOD | Heat | Horaire
             pdf.set_font("Arial", 'B', 10)
-            pdf.set_xy(x, 25)
-            pdf.cell(col_width, row_height, f"{wod} | {heat} | {start}-{end}", border=1, align='C')  # <- fill supprimé
-            pdf.ln(row_height)
-
+            pdf.set_xy(x, y_start)
+            pdf.cell(col_width, row_height, f"{wod} | {heat} | {start}-{end}", border=1, align='C')
+            
             # En-tête du tableau
-            pdf.set_x(x)
+            pdf.set_xy(x, y_start + row_height)
             pdf.set_font("Arial", 'B', 9)
-            pdf.set_fill_color(220, 220, 220)  # gris léger pour les en-têtes du tableau
+            pdf.set_fill_color(220, 220, 220)
             pdf.cell(col_width / 2, row_height, "Lane", border=1, align='C', fill=True)
             pdf.cell(col_width / 2, row_height, "Juge", border=1, align='C', fill=True)
 
-            # Contenu du tableau
+            # Contenu du tableau - CORRECTION : position Y incrémentée correctement
             pdf.set_font("Arial", '', 9)
             pdf.set_fill_color(255, 255, 255)
-            for lane, juge in sorted(lanes.items()):
-                pdf.set_x(x)
+            
+            for lane_num, (lane, juge) in enumerate(sorted(lanes.items())):
+                y_pos = y_start + row_height * 2 + lane_num * row_height
+                pdf.set_xy(x, y_pos)
                 pdf.cell(col_width / 2, row_height, str(lane), border=1, align='C')
                 pdf.cell(col_width / 2, row_height, juge, border=1, align='C')
-                pdf.ln(row_height)
 
     return pdf
 
