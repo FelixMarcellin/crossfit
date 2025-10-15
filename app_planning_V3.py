@@ -115,7 +115,7 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
         spacing_x = 15
         
         # Positions Y fixes pour éviter toute superposition
-        y_positions = [25, 90]  # Deux niveaux verticaux bien séparés
+        y_positions = [25, 145]  # Deux niveaux verticaux bien séparés
 
         for j in range(4):
             if i + j >= len(heats):
