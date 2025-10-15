@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 7.2 : Équilibrée + 2-on/2-off + Nom compétition + PDF heats corrigé
+Version 7.3 : Équilibrée + 2-on/2-off + Nom compétition + PDF heats corrigé + Unicode
 """
 
 import streamlit as st
@@ -18,15 +18,46 @@ import re
 # CONFIG STREAMLIT
 # ========================
 st.set_page_config(page_title="Planning Juges - Crossfit Amiens", layout="wide")
-st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.2)")
+st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.3)")
+
+
+# ========================
+# FONCTION NETTOYAGE TEXTE
+# ========================
+def clean_text(text):
+    """Nettoie le texte des caractères spéciaux problématiques"""
+    if pd.isna(text):
+        return ""
+    
+    text = str(text)
+    # Remplacement des caractères accentués
+    replacements = {
+        'à': 'a', 'â': 'a', 'ä': 'a',
+        'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
+        'î': 'i', 'ï': 'i',
+        'ô': 'o', 'ö': 'o',
+        'ù': 'u', 'û': 'u', 'ü': 'u',
+        'ç': 'c', 'ñ': 'n',
+        'À': 'A', 'Â': 'A', 'Ä': 'A',
+        'É': 'E', 'È': 'E', 'Ê': 'E', 'Ë': 'E',
+        'Î': 'I', 'Ï': 'I',
+        'Ô': 'O', 'Ö': 'O',
+        'Ù': 'U', 'Û': 'U', 'Ü': 'U',
+        'Ç': 'C', 'Ñ': 'N'
+    }
+    
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    
+    return text
 
 
 # ========================
 # PDF PAR JUGE
 # ========================
 def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
-    """Génère le PDF par juge"""
-    pdf = FPDF(orientation='P')
+    """Génère le PDF par juge avec nettoyage des caractères"""
+    pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
 
     for juge, creneaux in planning.items():
@@ -46,9 +77,9 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
 
         pdf.add_page()
         pdf.set_font("Arial", 'B', 16)
-        pdf.cell(0, 10, competition_name, 0, 1, 'C')  # Nom de la compétition
+        pdf.cell(0, 10, clean_text(competition_name), 0, 1, 'C')
         pdf.set_font("Arial", 'B', 14)
-        pdf.cell(0, 10, f"Planning : {juge}", 0, 1, 'C')
+        pdf.cell(0, 10, f"Planning : {clean_text(juge)}", 0, 1, 'C')
         pdf.ln(10)
 
         headers = ["Heure", "Lane", "WOD", "Heat #", "Athlete", "Division"]
@@ -65,14 +96,16 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
             pdf.set_fill_color(*row_colors[i % 2])
             start = str(c['start'])
             end = str(c['end'])
+            
             vals = [
                 f"{start} - {end}",
-                str(c['lane']),
-                str(c['wod']),
-                str(c['heat']),
-                str(c['athlete']),
-                str(c['division'])
+                clean_text(c['lane']),
+                clean_text(c['wod']),
+                clean_text(c['heat']),
+                clean_text(c['athlete']),
+                clean_text(c['division'])
             ]
+            
             for v, w in zip(vals, col_widths):
                 pdf.cell(w, 10, v, 1, 0, 'C', fill=True)
             pdf.ln()
@@ -86,10 +119,10 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
 
 
 # ========================
-# PDF PAR HEAT (4 tableaux par page - version simple)
+# PDF PAR HEAT (4 tableaux par page)
 # ========================
 def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
-    """Génère le PDF par heat (4 tableaux par page - espacement garanti)"""
+    """Génère le PDF par heat (4 tableaux par page - grand espacement)"""
     heat_map = defaultdict(lambda: defaultdict(str))
     for juge, creneaux in planning.items():
         for c in creneaux:
@@ -107,15 +140,15 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
 
         # Nom de la compétition
         pdf.set_font("Arial", 'B', 14)
-        pdf.cell(0, 10, competition_name, 0, 1, 'C')
+        pdf.cell(0, 10, clean_text(competition_name), 0, 1, 'C')
         pdf.ln(4)
 
         col_width = 85
         row_height = 8
         spacing_x = 15
         
-        # Positions Y fixes pour éviter toute superposition
-        y_positions = [25, 145]  # Deux niveaux verticaux bien séparés
+        # Grand espacement entre les rangées
+        y_positions = [25, 120]
 
         for j in range(4):
             if i + j >= len(heats):
@@ -123,16 +156,16 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
 
             (wod, heat, start, end, loc), lanes = heats[i + j]
             
-            col = j % 2  # 0 ou 1 pour la colonne
-            row = j // 2 # 0 ou 1 pour la ligne
+            col = j % 2
+            row = j // 2
             
             x = 10 + col * (col_width + spacing_x)
-            y_start = y_positions[row]  # Position Y fixe
+            y_start = y_positions[row]
 
             # En-tête du bloc heat
             pdf.set_font("Arial", 'B', 10)
             pdf.set_xy(x, y_start)
-            pdf.cell(col_width, row_height, f"{wod} | {heat} | {start}-{end}", border=1, align='C')
+            pdf.cell(col_width, row_height, clean_text(f"{wod} | {heat} | {start}-{end}"), border=1, align='C')
             
             # En-tête du tableau
             pdf.set_xy(x, y_start + row_height)
@@ -148,8 +181,8 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
             for lane_num, (lane, juge) in enumerate(sorted(lanes.items())):
                 y_pos = y_start + row_height * 2 + lane_num * row_height
                 pdf.set_xy(x, y_pos)
-                pdf.cell(col_width / 2, row_height, str(lane), border=1, align='C')
-                pdf.cell(col_width / 2, row_height, juge, border=1, align='C')
+                pdf.cell(col_width / 2, row_height, clean_text(str(lane)), border=1, align='C')
+                pdf.cell(col_width / 2, row_height, clean_text(juge), border=1, align='C')
 
     return pdf
 
