@@ -86,10 +86,10 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
 
 
 # ========================
-# PDF PAR HEAT (4 tableaux par page)
+# PDF PAR HEAT (4 tableaux par page - version simple)
 # ========================
 def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
-    """Génère le PDF par heat (4 tableaux par page)"""
+    """Génère le PDF par heat (4 tableaux par page - espacement garanti)"""
     heat_map = defaultdict(lambda: defaultdict(str))
     for juge, creneaux in planning.items():
         for c in creneaux:
@@ -102,7 +102,6 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
 
     heats = sorted(heat_map.items(), key=lambda x: (x[0][0], x[0][1]))
 
-    # 4 tableaux par page (2x2)
     for i in range(0, len(heats), 4):
         pdf.add_page()
 
@@ -111,10 +110,12 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
         pdf.cell(0, 10, competition_name, 0, 1, 'C')
         pdf.ln(4)
 
-        col_width = 85  # Légèrement réduit pour tenir 2 par ligne
+        col_width = 85
         row_height = 8
-        spacing_x = 15  # Espacement horizontal
-        spacing_y = 60  # Espacement vertical entre les rangées
+        spacing_x = 15
+        
+        # Positions Y fixes pour éviter toute superposition
+        y_positions = [25, 90]  # Deux niveaux verticaux bien séparés
 
         for j in range(4):
             if i + j >= len(heats):
@@ -122,14 +123,13 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
 
             (wod, heat, start, end, loc), lanes = heats[i + j]
             
-            # Position calculée : 2 tableaux par ligne
             col = j % 2  # 0 ou 1 pour la colonne
             row = j // 2 # 0 ou 1 pour la ligne
             
             x = 10 + col * (col_width + spacing_x)
-            y_start = 25 + row * spacing_y
+            y_start = y_positions[row]  # Position Y fixe
 
-            # En-tête du bloc heat : WOD | Heat | Horaire
+            # En-tête du bloc heat
             pdf.set_font("Arial", 'B', 10)
             pdf.set_xy(x, y_start)
             pdf.cell(col_width, row_height, f"{wod} | {heat} | {start}-{end}", border=1, align='C')
@@ -152,7 +152,6 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
                 pdf.cell(col_width / 2, row_height, juge, border=1, align='C')
 
     return pdf
-
 
 
 # ========================
