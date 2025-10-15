@@ -163,49 +163,71 @@ def extract_heat_number(heat_str):
 # ATTRIBUTION DES JUGES VERSION 4
 # ============================================================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation):
+    """
+    Nouvelle version stricte : chaque juge enchaîne 2 heats consécutifs,
+    puis observe au moins 2 heats de repos avant de rejuger.
+    """
     planning = {j: [] for j in judges}
 
+    # Préparer les heats dans l'ordre chronologique
     schedule = schedule.copy()
     schedule['heat_num'] = schedule['Heat #'].apply(extract_heat_number)
-    schedule = schedule.sort_values(['Workout', 'heat_num', 'Lane'])
+    schedule = schedule.sort_values(['Heat Start Time', 'Workout', 'heat_num', 'Lane']).reset_index(drop=True)
 
+    # Liste des heats uniques (tous WODs confondus)
     heats = []
-    for (wod, heat_num), group in schedule.groupby(['Workout', 'heat_num']):
-        heats.append({'wod': wod, 'heat_num': heat_num, 'rows': group.to_dict('records')})
+    for (wod, heat_num, start, end), group in schedule.groupby(['Workout', 'heat_num', 'Heat Start Time', 'Heat End Time']):
+        heats.append({
+            'wod': wod,
+            'heat_num': heat_num,
+            'start': start,
+            'end': end,
+            'rows': group.to_dict('records')
+        })
 
-    last_heat_index = {j: -999 for j in judges}
-    heats_par_juge = {j: 0 for j in judges}
+    # Attribution stricte 2 on / 2 off
+    nb_juges = len(judges)
+    block_size = 2  # 2 heats de suite par juge
+    rest_size = 2   # au moins 2 heats de repos
+    total_heats = len(heats)
 
+    # On crée une séquence d'attribution cyclique : 2 on, 2 off
+    sequence = []
+    j_idx = 0
+    for i in range(0, total_heats, block_size + rest_size):
+        # juges actifs sur ce bloc
+        for k in range(block_size):
+            if i + k < total_heats:
+                sequence.append(j_idx)
+        # puis repos
+        for _ in range(rest_size):
+            j_idx = (j_idx + 1) % nb_juges
+
+    # Si le planning dépasse la séquence, on boucle
+    while len(sequence) < total_heats:
+        j_idx = (j_idx + 1) % nb_juges
+        sequence.append(j_idx)
+
+    # Affectation selon la séquence
     for idx, heat in enumerate(heats):
+        judge_index = sequence[idx] % nb_juges
+        juge = judges[judge_index]
         wod = heat['wod']
-        juges_dispo = disponibilites.get(wod, [])
-        if not juges_dispo:
-            continue
 
-        for row in heat['rows']:
-            candidats_valides = []
-            for j in juges_dispo:
-                if any(c['wod'] == wod and c['heat_num'] == heat['heat_num'] for c in planning[j]):
-                    continue
-
-                # Bloc de 2 heats + 2 repos
-                diff = idx - last_heat_index[j]
-                if heats_par_juge[j] % 2 == 0 and diff < 2:
-                    continue
-
-                candidats_valides.append(j)
-
-            if not candidats_valides:
-                candidats_valides = [j for j in juges_dispo
-                                     if not any(c['wod'] == wod and c['heat_num'] == heat['heat_num']
-                                                for c in planning[j])]
-
-            if not candidats_valides:
+        # Si le juge n'est pas dispo sur ce WOD, trouver un remplaçant dispo
+        dispo = disponibilites.get(wod, [])
+        if juge not in dispo:
+            if dispo:
+                juge = dispo[idx % len(dispo)]
+            else:
                 continue
 
-            best = min(candidats_valides, key=lambda j: len(planning[j]))
+        for row in heat['rows']:
+            # Éviter de doubler un juge sur un même heat
+            if any(c['wod'] == wod and c['heat_num'] == heat['heat_num'] for c in planning[juge]):
+                continue
 
-            planning[best].append({
+            planning[juge].append({
                 'wod': wod,
                 'lane': row['Lane'],
                 'athlete': row['Competitor'],
@@ -216,10 +238,9 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
                 'heat': row['Heat #'],
                 'heat_num': heat['heat_num']
             })
-            last_heat_index[best] = idx
-            heats_par_juge[best] += 1
 
     return planning
+
 
 
 # ============================================================
