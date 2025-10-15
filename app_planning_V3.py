@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 7.3 : Équilibrée + 2-on/2-off + Nom compétition + PDF heats corrigé + Unicode
+Version 7.4 : Équilibrée + 2-on/2-off + Nom compétition + PDF heats corrigé + Unicode complet
 """
 
 import streamlit as st
@@ -12,53 +12,63 @@ import os
 from collections import defaultdict
 import traceback
 import re
+import base64
 
 
 # ========================
 # CONFIG STREAMLIT
 # ========================
 st.set_page_config(page_title="Planning Juges - Crossfit Amiens", layout="wide")
-st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.3)")
+st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.4)")
 
 
 # ========================
-# FONCTION NETTOYAGE TEXTE
+# FONCTION NETTOYAGE TEXTE ROBUSTE
 # ========================
 def clean_text(text):
-    """Nettoie le texte des caractères spéciaux problématiques"""
+    """Nettoie le texte des caractères spéciaux problématiques de manière robuste"""
     if pd.isna(text):
         return ""
     
     text = str(text)
-    # Remplacement des caractères accentués
+    
+    # Liste complète des remplacements
     replacements = {
-        'à': 'a', 'â': 'a', 'ä': 'a',
-        'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
-        'î': 'i', 'ï': 'i',
-        'ô': 'o', 'ö': 'o',
-        'ù': 'u', 'û': 'u', 'ü': 'u',
-        'ç': 'c', 'ñ': 'n',
-        'À': 'A', 'Â': 'A', 'Ä': 'A',
-        'É': 'E', 'È': 'E', 'Ê': 'E', 'Ë': 'E',
-        'Î': 'I', 'Ï': 'I',
-        'Ô': 'O', 'Ö': 'O',
-        'Ù': 'U', 'Û': 'U', 'Ü': 'U',
-        'Ç': 'C', 'Ñ': 'N'
+        'à': 'a', 'á': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a', 'å': 'a',
+        'è': 'e', 'é': 'e', 'ê': 'e', 'ë': 'e',
+        'ì': 'i', 'í': 'i', 'î': 'i', 'ï': 'i',
+        'ò': 'o', 'ó': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o', 'ø': 'o',
+        'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u',
+        'ç': 'c', 'ñ': 'n', 'ß': 'ss',
+        'À': 'A', 'Á': 'A', 'Â': 'A', 'Ã': 'A', 'Ä': 'A', 'Å': 'A',
+        'È': 'E', 'É': 'E', 'Ê': 'E', 'Ë': 'E',
+        'Ì': 'I', 'Í': 'I', 'Î': 'I', 'Ï': 'I',
+        'Ò': 'O', 'Ó': 'O', 'Ô': 'O', 'Õ': 'O', 'Ö': 'O', 'Ø': 'O',
+        'Ù': 'U', 'Ú': 'U', 'Û': 'U', 'Ü': 'U',
+        'Ç': 'C', 'Ñ': 'N',
+        'œ': 'oe', 'æ': 'ae', '€': 'E', '£': 'GBP',
+        '§': 'S', 'µ': 'u', '°': 'deg', '²': '2', '³': '3'
     }
     
     for old, new in replacements.items():
         text = text.replace(old, new)
     
+    # Supprimer tout caractère non-ASCII restant
+    text = text.encode('ascii', 'ignore').decode('ascii')
+    
     return text
 
 
 # ========================
-# PDF PAR JUGE
+# PDF PAR JUGE (avec gestion Unicode)
 # ========================
 def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
-    """Génère le PDF par juge avec nettoyage des caractères"""
+    """Génère le PDF par juge avec gestion robuste de l'encodage"""
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
+    
+    # Utiliser la police standard (pas besoin d'ajouter une police spéciale)
+    # FPDF gère mieux l'ASCII que l'Unicode
 
     for juge, creneaux in planning.items():
         if not creneaux:
@@ -94,26 +104,32 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
         row_colors = [(255, 255, 255), (240, 240, 240)]
         for i, c in enumerate(creneaux):
             pdf.set_fill_color(*row_colors[i % 2])
-            start = str(c['start'])
-            end = str(c['end'])
+            start = clean_text(str(c['start']))
+            end = clean_text(str(c['end']))
             
+            # Nettoyer toutes les valeurs
             vals = [
                 f"{start} - {end}",
-                clean_text(c['lane']),
-                clean_text(c['wod']),
-                clean_text(c['heat']),
-                clean_text(c['athlete']),
-                clean_text(c['division'])
+                clean_text(str(c['lane'])),
+                clean_text(str(c['wod'])),
+                clean_text(str(c['heat'])),
+                clean_text(str(c['athlete']))[:30],  # Limiter la longueur
+                clean_text(str(c['division']))
             ]
             
             for v, w in zip(vals, col_widths):
-                pdf.cell(w, 10, v, 1, 0, 'C', fill=True)
+                # Utiliser une méthode plus sûre pour éviter les erreurs d'encodage
+                try:
+                    pdf.cell(w, 10, v, 1, 0, 'C', fill=True)
+                except:
+                    # En cas d'erreur, utiliser un texte de secours
+                    pdf.cell(w, 10, "N/A", 1, 0, 'C', fill=True)
             pdf.ln()
 
         pdf.ln(6)
         pdf.set_font("Arial", 'I', 9)
         total_wods = len({c['wod'] for c in creneaux})
-        pdf.cell(0, 8, f"Total : {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
+        pdf.cell(0, 8, f"Total : {len(creneaux)} creneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
 
@@ -165,7 +181,8 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
             # En-tête du bloc heat
             pdf.set_font("Arial", 'B', 10)
             pdf.set_xy(x, y_start)
-            pdf.cell(col_width, row_height, clean_text(f"{wod} | {heat} | {start}-{end}"), border=1, align='C')
+            header_text = clean_text(f"{wod} | {heat} | {start}-{end}")
+            pdf.cell(col_width, row_height, header_text, border=1, align='C')
             
             # En-tête du tableau
             pdf.set_xy(x, y_start + row_height)
@@ -178,11 +195,11 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
             pdf.set_font("Arial", '', 9)
             pdf.set_fill_color(255, 255, 255)
             
-            for lane_num, (lane, juge) in enumerate(sorted(lanes.items())):
+            for lane_num, (lane, juge_name) in enumerate(sorted(lanes.items())):
                 y_pos = y_start + row_height * 2 + lane_num * row_height
                 pdf.set_xy(x, y_pos)
                 pdf.cell(col_width / 2, row_height, clean_text(str(lane)), border=1, align='C')
-                pdf.cell(col_width / 2, row_height, clean_text(juge), border=1, align='C')
+                pdf.cell(col_width / 2, row_height, clean_text(juge_name), border=1, align='C')
 
     return pdf
 
@@ -246,14 +263,14 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
                 best = min(judges, key=lambda j: state[j]['count'])
 
             planning[best].append({
-                'wod': wod,
-                'lane': row['Lane'],
-                'athlete': row['Competitor'],
-                'division': row['Division'],
-                'location': row['Workout Location'],
-                'start': row['Heat Start Time'],
-                'end': row['Heat End Time'],
-                'heat': row['Heat #'],
+                'wod': clean_text(str(wod)),
+                'lane': clean_text(str(row['Lane'])),
+                'athlete': clean_text(str(row['Competitor'])),
+                'division': clean_text(str(row['Division'])),
+                'location': clean_text(str(row['Workout Location'])),
+                'start': clean_text(str(row['Heat Start Time'])),
+                'end': clean_text(str(row['Heat End Time'])),
+                'heat': clean_text(str(row['Heat #'])),
                 'heat_num': heat['heat_num']
             })
             used.add(best)
@@ -306,58 +323,78 @@ def main():
         st.header("👩‍⚖️ Juges")
         judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
         if judges_file:
-            judges = pd.read_csv(judges_file, header=None, encoding='latin1')[0].dropna().tolist()
+            judges_df = pd.read_csv(judges_file, header=None, encoding='latin1')
+            judges = [clean_text(str(j)) for j in judges_df[0].dropna().tolist()]
         else:
             judges_text = st.text_area("Saisir les juges (un par ligne)", "Juge 1\nJuge 2\nJuge 3")
-            judges = [j.strip() for j in judges_text.split('\n') if j.strip()]
+            judges = [clean_text(j.strip()) for j in judges_text.split('\n') if j.strip()]
 
     if schedule_file and judges:
-        schedule = pd.read_excel(schedule_file, engine='openpyxl')
-        required = ['Workout', 'Lane', 'Competitor', 'Division', 'Workout Location',
-                    'Heat Start Time', 'Heat End Time', 'Heat #']
-        if not all(c in schedule.columns for c in required):
-            st.error("⚠️ Colonnes manquantes dans le fichier Excel.")
-            return
+        try:
+            schedule = pd.read_excel(schedule_file, engine='openpyxl')
+            required = ['Workout', 'Lane', 'Competitor', 'Division', 'Workout Location',
+                        'Heat Start Time', 'Heat End Time', 'Heat #']
+            if not all(c in schedule.columns for c in required):
+                st.error("⚠️ Colonnes manquantes dans le fichier Excel.")
+                return
 
-        schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
-        wods = sorted(schedule['Workout'].dropna().unique())
-        st.header("📅 Disponibilités des juges")
-        disponibilites = {}
-        cols = st.columns(3)
-        for i, wod in enumerate(wods):
-            with cols[i % 3]:
-                with st.expander(f"{wod}"):
-                    select_all = st.checkbox(f"Tout sélectionner ({wod})", key=f"sel_{wod}")
-                    if select_all:
-                        disponibilites[wod] = judges
-                    else:
-                        disponibilites[wod] = st.multiselect("Juges disponibles", judges, key=f"multi_{wod}")
+            # Nettoyer les données dès la lecture
+            for col in ['Workout', 'Competitor', 'Division', 'Workout Location', 'Heat #']:
+                if col in schedule.columns:
+                    schedule[col] = schedule[col].apply(lambda x: clean_text(str(x)) if pd.notna(x) else "")
+            
+            schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
+            wods = sorted(schedule['Workout'].dropna().unique())
+            
+            st.header("📅 Disponibilités des juges")
+            disponibilites = {}
+            cols = st.columns(3)
+            for i, wod in enumerate(wods):
+                with cols[i % 3]:
+                    with st.expander(f"{wod}"):
+                        select_all = st.checkbox(f"Tout sélectionner ({wod})", key=f"sel_{wod}")
+                        if select_all:
+                            disponibilites[wod] = judges
+                        else:
+                            disponibilites[wod] = st.multiselect("Juges disponibles", judges, key=f"multi_{wod}")
 
-        if st.button("🦄 Générer le planning"):
-            planning = assign_judges_equitable(schedule, judges, disponibilites, 2)
+            if st.button("🦄 Générer le planning"):
+                planning = assign_judges_equitable(schedule, judges, disponibilites, 2)
 
-            st.subheader("📊 Équilibre des assignations")
-            counts = {j: len(planning[j]) for j in judges}
-            total = sum(counts.values())
-            target = total // len(judges)
-            for j in sorted(counts, key=counts.get, reverse=True):
-                ecart = counts[j] - target
-                emoji = "✅" if abs(ecart) <= 1 else "⚠️"
-                st.write(f"{emoji} {j}: {counts[j]} créneaux ({ecart:+d})")
+                st.subheader("📊 Équilibre des assignations")
+                counts = {j: len(planning[j]) for j in judges}
+                total = sum(counts.values())
+                target = total // len(judges)
+                for j in sorted(counts, key=counts.get, reverse=True):
+                    ecart = counts[j] - target
+                    emoji = "✅" if abs(ecart) <= 1 else "⚠️"
+                    st.write(f"{emoji} {j}: {counts[j]} créneaux ({ecart:+d})")
 
-            pdf_juges = generate_pdf_tableau(planning, competition_name)
-            pdf_heats = generate_heat_pdf(planning, competition_name)
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t1:
-                pdf_juges.output(t1.name)
-                with open(t1.name, "rb") as f:
-                    st.download_button("📘 Télécharger planning par juge", f, "planning_juges.pdf")
-                os.unlink(t1.name)
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t2:
-                pdf_heats.output(t2.name)
-                with open(t2.name, "rb") as f:
-                    st.download_button("📗 Télécharger planning par heat", f, "planning_heats.pdf")
-                os.unlink(t2.name)
-            st.success("✅ Planning généré avec succès !")
+                try:
+                    pdf_juges = generate_pdf_tableau(planning, competition_name)
+                    pdf_heats = generate_heat_pdf(planning, competition_name)
+                    
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t1:
+                        pdf_juges.output(t1.name)
+                        with open(t1.name, "rb") as f:
+                            st.download_button("📘 Télécharger planning par juge", f, "planning_juges.pdf")
+                        os.unlink(t1.name)
+                    
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t2:
+                        pdf_heats.output(t2.name)
+                        with open(t2.name, "rb") as f:
+                            st.download_button("📗 Télécharger planning par heat", f, "planning_heats.pdf")
+                        os.unlink(t2.name)
+                    
+                    st.success("✅ Planning généré avec succès !")
+                    
+                except Exception as e:
+                    st.error(f"❌ Erreur lors de la génération des PDF: {str(e)}")
+                    st.info("💡 Essayez de simplifier les noms des juges ou des athlètes")
+
+        except Exception as e:
+            st.error(f"❌ Erreur lors de la lecture du fichier: {str(e)}")
+            st.info("💡 Vérifiez que le fichier Excel est valide et ne contient pas de caractères spéciaux problématiques")
 
     else:
         st.info("👉 Veuillez importer un fichier Excel et saisir la liste des juges.")
