@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 7.8 : Largeur optimisée pour toute la feuille
+Version 8.0 : Choix flexible du système on/off
 """
 
 import streamlit as st
@@ -18,7 +18,7 @@ import re
 # CONFIG STREAMLIT
 # ========================
 st.set_page_config(page_title="Planning Juges - Crossfit Amiens", layout="wide")
-st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.8)")
+st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 8.0)")
 
 
 # ========================
@@ -263,10 +263,10 @@ def extract_heat_number(heat_str):
 
 
 # ========================
-# ATTRIBUTION ÉQUILIBRÉE + 2-ON/2-OFF
+# ATTRIBUTION ÉQUILIBRÉE AVEC SYSTÈME ON/OFF FLEXIBLE
 # ========================
-def assign_judges_equitable(schedule, judges, disponibilites, rotation):
-    """Attribution équilibrée avec blocs 2-on / 2-off prioritaires"""
+def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
+    """Attribution équilibrée avec système on/off flexible"""
     planning = {j: [] for j in judges}
     df = schedule.copy()
     df['heat_num'] = df['Heat #'].apply(extract_heat_number)
@@ -279,8 +279,11 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
     n_judges = len(judges)
     target = len(df) // n_judges if n_judges > 0 else 0
 
+    # Configuration flexible du système on/off
+    ON = rotation_config['on']
+    REST = rotation_config['off']
+    
     state = {j: {'last': -999, 'on': 0, 'rest': 0, 'count': 0} for j in judges}
-    ON, REST = 2, 2
 
     for idx, heat in enumerate(heats):
         wod = heat['wod']
@@ -297,10 +300,13 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
                 if any(c['wod'] == wod and c['heat_num'] == heat['heat_num'] for c in planning[j]):
                     continue
                 score = 0
+                # Priorité pour continuer un bloc en cours
                 if s['last'] == idx - 1 and s['on'] > 0:
                     score -= 100  # continuer bloc
+                # Pénalité pour ceux en repos
                 if s['rest'] > 0:
                     score += 50  # éviter ceux en repos
+                # Équilibrage du nombre total de créneaux
                 score += max(0, s['count'] - target)
                 score += (s['count'] - target) * 2
                 if score < best_score:
@@ -321,7 +327,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
             })
             used.add(best)
 
-            # Mise à jour état
+            # Mise à jour état avec système flexible
             s = state[best]
             if s['last'] == idx - 1 and s['on'] > 0:
                 s['on'] -= 1
@@ -333,7 +339,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
             s['last'] = idx
             s['count'] += 1
 
-        # décrémenter repos
+        # décrémenter repos pour tous les juges
         for j in judges:
             if state[j]['rest'] > 0 and state[j]['last'] != idx:
                 state[j]['rest'] -= 1
@@ -375,6 +381,21 @@ def main():
             judges_text = st.text_area("Saisir les juges (un par ligne)", "Juge 1\nJuge 2\nJuge 3")
             judges = [clean_text(j.strip()) for j in judges_text.split('\n') if j.strip()]
 
+        st.header("⚙️ Configuration du roulement")
+        rotation_system = st.selectbox(
+            "Système de roulement",
+            options=[
+                {"name": "1-on/1-off", "on": 1, "off": 1},
+                {"name": "2-on/2-off", "on": 2, "off": 2},
+                {"name": "3-on/3-off", "on": 3, "off": 3},
+                {"name": "2-on/1-off", "on": 2, "off": 1},
+                {"name": "3-on/2-off", "on": 3, "off": 2}
+            ],
+            format_func=lambda x: x["name"]
+        )
+        
+        st.info(f"🔄 Système sélectionné : {rotation_system['name']}")
+
     if schedule_file and judges:
         try:
             schedule = pd.read_excel(schedule_file, engine='openpyxl')
@@ -405,12 +426,16 @@ def main():
                             disponibilites[wod] = st.multiselect("Juges disponibles", judges, key=f"multi_{wod}")
 
             if st.button("🦄 Générer le planning"):
-                planning = assign_judges_equitable(schedule, judges, disponibilites, 2)
+                planning = assign_judges_equitable(schedule, judges, disponibilites, rotation_system)
 
                 st.subheader("📊 Équilibre des assignations")
                 counts = {j: len(planning[j]) for j in judges}
                 total = sum(counts.values())
                 target = total // len(judges)
+                
+                # Afficher le système utilisé
+                st.info(f"**Système de roulement :** {rotation_system['name']}")
+                
                 for j in sorted(counts, key=counts.get, reverse=True):
                     ecart = counts[j] - target
                     emoji = "✅" if abs(ecart) <= 1 else "⚠️"
