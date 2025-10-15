@@ -86,10 +86,10 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
 
 
 # ========================
-# PDF PAR HEAT (corrigé)
+# PDF PAR HEAT (4 tableaux par page)
 # ========================
 def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
-    """Génère le PDF par heat (corrigé : position Y gérée correctement)"""
+    """Génère le PDF par heat (4 tableaux par page)"""
     heat_map = defaultdict(lambda: defaultdict(str))
     for juge, creneaux in planning.items():
         for c in creneaux:
@@ -102,7 +102,8 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
 
     heats = sorted(heat_map.items(), key=lambda x: (x[0][0], x[0][1]))
 
-    for i in range(0, len(heats), 2):
+    # 4 tableaux par page (2x2)
+    for i in range(0, len(heats), 4):
         pdf.add_page()
 
         # Nom de la compétition
@@ -110,17 +111,23 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
         pdf.cell(0, 10, competition_name, 0, 1, 'C')
         pdf.ln(4)
 
-        col_width = 90
+        col_width = 85  # Légèrement réduit pour tenir 2 par ligne
         row_height = 8
-        spacing = 15
+        spacing_x = 15  # Espacement horizontal
+        spacing_y = 60  # Espacement vertical entre les rangées
 
-        for j in range(2):
+        for j in range(4):
             if i + j >= len(heats):
                 break
 
             (wod, heat, start, end, loc), lanes = heats[i + j]
-            x = 10 + j * (col_width + spacing)
-            y_start = 25  # Position Y de départ pour ce bloc
+            
+            # Position calculée : 2 tableaux par ligne
+            col = j % 2  # 0 ou 1 pour la colonne
+            row = j // 2 # 0 ou 1 pour la ligne
+            
+            x = 10 + col * (col_width + spacing_x)
+            y_start = 25 + row * spacing_y
 
             # En-tête du bloc heat : WOD | Heat | Horaire
             pdf.set_font("Arial", 'B', 10)
@@ -134,7 +141,7 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
             pdf.cell(col_width / 2, row_height, "Lane", border=1, align='C', fill=True)
             pdf.cell(col_width / 2, row_height, "Juge", border=1, align='C', fill=True)
 
-            # Contenu du tableau - CORRECTION : position Y incrémentée correctement
+            # Contenu du tableau
             pdf.set_font("Arial", '', 9)
             pdf.set_fill_color(255, 255, 255)
             
