@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 4 : Blocs de 2 heats + 2 repos, pas de double affectation sur un même heat
+Version 5 : Priorité 2 heats consécutifs puis 2 repos (flexible si impossible)
 """
 
 import streamlit as st
@@ -9,18 +9,18 @@ import pandas as pd
 from fpdf import FPDF
 import tempfile
 import os
-from typing import Dict, List
 from collections import defaultdict
 import traceback
+import re
 
 st.set_page_config(page_title="Planning Juges by Crossfit Amiens 🦄", layout="wide")
-st.title("Planning Juges by Crossfit Amiens 🦄 - Version 4")
+st.title("Planning Juges by Crossfit Amiens 🦄 - Version 5 (2 on / 2 off priorité)")
 
 
-# ============================================================
-# PDF TABLEAU PAR JUGE
-# ============================================================
-def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
+# ---------------------------
+# Utilitaires PDF
+# ---------------------------
+def generate_pdf_tableau(planning: dict) -> FPDF:
     pdf = FPDF(orientation='P')
     pdf.set_auto_page_break(auto=True, margin=15)
 
@@ -60,12 +60,10 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
 
         for i, c in enumerate(creneaux):
             pdf.set_fill_color(*row_colors[i % 2])
-
             start_time = c.get('start')
             end_time = c.get('end')
             start_str = start_time.strftime('%H:%M') if hasattr(start_time, 'strftime') else str(start_time)
             end_str = end_time.strftime('%H:%M') if hasattr(end_time, 'strftime') else str(end_time)
-
             data = [
                 f"{start_str} - {end_str}",
                 str(c.get('lane', '')),
@@ -74,7 +72,6 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
                 str(c.get('athlete', '')),
                 str(c.get('division', ''))
             ]
-
             for val, width in zip(data, col_widths):
                 pdf.cell(width, 10, val, border=1, align='C', fill=True)
             pdf.ln()
@@ -87,12 +84,8 @@ def generate_pdf_tableau(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     return pdf
 
 
-# ============================================================
-# PDF PAR HEAT (carte globale)
-# ============================================================
-def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
+def generate_heat_pdf(planning: dict) -> FPDF:
     heat_map = defaultdict(lambda: defaultdict(str))
-
     for juge, creneaux in planning.items():
         for c in creneaux:
             start = c['start'].strftime('%H:%M') if hasattr(c['start'], 'strftime') else c['start']
@@ -111,14 +104,11 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
         col_width = 90
         row_height = 8
         spacing = 15
-
         for j in range(2):
             if i + j >= len(heats):
                 break
-
             (wod, heat, start, end, location), lanes = heats[i + j]
             x_position = 10 + j * (col_width + spacing)
-
             pdf.set_font("Arial", 'B', 10)
             pdf.set_xy(x_position, 15)
             pdf.cell(col_width, row_height, f"{wod} - {heat}", border=1, align='C', fill=True)
@@ -141,11 +131,10 @@ def generate_heat_pdf(planning: Dict[str, List[Dict[str, any]]]) -> FPDF:
     return pdf
 
 
-# ============================================================
-# EXTRACTION DU NUMÉRO DE HEAT
-# ============================================================
+# ---------------------------
+# Helpers
+# ---------------------------
 def extract_heat_number(heat_str):
-    import re
     if pd.isna(heat_str):
         return 0
     if isinstance(heat_str, (int, float)):
@@ -159,24 +148,35 @@ def extract_heat_number(heat_str):
     return 0
 
 
-# ============================================================
-# ATTRIBUTION DES JUGES VERSION 4
-# ============================================================
-def assign_judges_equitable(schedule, judges, disponibilites, rotation):
+# ---------------------------
+# Attribution V5 (priorité 2 on / 2 off, flexible si impossible)
+# ---------------------------
+def assign_judges_equitable(schedule: pd.DataFrame, judges: list, disponibilites: dict, rotation: int):
     """
-    Nouvelle version stricte : chaque juge enchaîne 2 heats consécutifs,
-    puis observe au moins 2 heats de repos avant de rejuger.
+    Priorité stricte : 2 heats consécutifs puis 2 de repos si possible.
+    Si impossible, autorise 1 ou 3 (ou plus si nécessaire) en minimisant ces cas.
+    Garantit qu'une ligne = un juge (si WOD a au moins un juge disponible).
     """
+    # init planning vide
     planning = {j: [] for j in judges}
 
-    # Préparer les heats dans l'ordre chronologique
-    schedule = schedule.copy()
-    schedule['heat_num'] = schedule['Heat #'].apply(extract_heat_number)
-    schedule = schedule.sort_values(['Heat Start Time', 'Workout', 'heat_num', 'Lane']).reset_index(drop=True)
+    # préparer et trier les heats globalement (ordre chronologique)
+    df = schedule.copy()
+    df['heat_num'] = df['Heat #'].apply(extract_heat_number)
 
-    # Liste des heats uniques (tous WODs confondus)
+    # Convertir times si possible pour un tri fiable
+    for col in ['Heat Start Time', 'Heat End Time']:
+        if col in df.columns:
+            try:
+                df[col] = pd.to_datetime(df[col]).dt.time
+            except Exception:
+                pass
+
+    # Nous construisons une liste de heats (globalement ordonnée)
+    df = df.sort_values(['Heat Start Time', 'Workout', 'heat_num', 'Lane']).reset_index(drop=True)
+
     heats = []
-    for (wod, heat_num, start, end), group in schedule.groupby(['Workout', 'heat_num', 'Heat Start Time', 'Heat End Time']):
+    for (wod, heat_num, start, end), group in df.groupby(['Workout', 'heat_num', 'Heat Start Time', 'Heat End Time']):
         heats.append({
             'wod': wod,
             'heat_num': heat_num,
@@ -185,49 +185,94 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
             'rows': group.to_dict('records')
         })
 
-    # Attribution stricte 2 on / 2 off
-    nb_juges = len(judges)
-    block_size = 2  # 2 heats de suite par juge
-    rest_size = 2   # au moins 2 heats de repos
     total_heats = len(heats)
+    if total_heats == 0:
+        return planning
 
-    # On crée une séquence d'attribution cyclique : 2 on, 2 off
-    sequence = []
-    j_idx = 0
-    for i in range(0, total_heats, block_size + rest_size):
-        # juges actifs sur ce bloc
-        for k in range(block_size):
-            if i + k < total_heats:
-                sequence.append(j_idx)
-        # puis repos
-        for _ in range(rest_size):
-            j_idx = (j_idx + 1) % nb_juges
+    # Etat par juge pour gérer séquences
+    state = {}
+    for j in judges:
+        state[j] = {
+            'mode': 'idle',       # 'idle' / 'on' / 'rest'
+            'remaining_on': 0,    # si en on-block, combien de heats restants (incluant le courant)
+            'remaining_rest': 0,  # si en repos, combien de heats restants
+            'last_heat_idx': -999,# dernier index de heat servi
+            'assign_count': 0     # nombre de lignes assignées
+        }
 
-    # Si le planning dépasse la séquence, on boucle
-    while len(sequence) < total_heats:
-        j_idx = (j_idx + 1) % nb_juges
-        sequence.append(j_idx)
+    # Contrôles prioritaires
+    PREFERRED_ON = 2  # priorité : 2 heats consécutifs
+    PREFERRED_REST = 2
 
-    # Affectation selon la séquence
+    # On parcourt les heats chronologiquement
     for idx, heat in enumerate(heats):
-        judge_index = sequence[idx] % nb_juges
-        juge = judges[judge_index]
         wod = heat['wod']
+        rows = heat['rows']
 
-        # Si le juge n'est pas dispo sur ce WOD, trouver un remplaçant dispo
-        dispo = disponibilites.get(wod, [])
-        if juge not in dispo:
-            if dispo:
-                juge = dispo[idx % len(dispo)]
-            else:
+        # liste des juges déjà utilisés pour ce heat (on interdit duplication)
+        used_in_this_heat = set()
+
+        # pour chaque ligne (lane) du heat, on doit assigner un juge
+        for row in rows:
+            # candidats = juges disponibles pour ce WOD
+            candidats = [j for j in disponibilites.get(wod, []) if j in judges and j not in used_in_this_heat]
+            if not candidats:
+                # aucun juge dispo pour ce WOD : on ne peut pas assigner -> on loggue un fallback
+                # (dans main on empêche cette situation avant de lancer)
                 continue
 
-        for row in heat['rows']:
-            # Éviter de doubler un juge sur un même heat
-            if any(c['wod'] == wod and c['heat_num'] == heat['heat_num'] for c in planning[juge]):
-                continue
+            # Construire scoring des candidats
+            scored = []
+            for j in candidats:
+                s = state[j]
+                score = 0
+                reasons = []
 
-            planning[juge].append({
+                # 1) Priorité très forte : juge qui était sur le heat précédent (idx-1)
+                #    et qui est en 'on' avec remaining_on > 0 -> on veut le garder pour obtenir la 2ème heat consécutive.
+                if s['last_heat_idx'] == idx - 1 and s['mode'] == 'on' and s['remaining_on'] > 0:
+                    score -= 100  # très prioritaire
+                    reasons.append("continue_on_block")
+
+                # 2) Si juge est idle or just finished rest (remaining_rest==0) -> peut démarrer un bloc on
+                if s['mode'] == 'idle' or (s['mode'] == 'rest' and s['remaining_rest'] == 0):
+                    score -= 50
+                    reasons.append("ready_to_start")
+
+                # 3) Désavantage pour ceux encore en repos (mais with remaining_rest > 0)
+                if s['mode'] == 'rest' and s['remaining_rest'] > 0:
+                    score += 50
+                    reasons.append("still_resting")
+
+                # 4) Charge actuelle : on préfère juges moins chargés
+                score += s['assign_count'] * 2
+
+                # 5) Si juge a déjà servi plusieurs heats consécutifs récemment (remaining_on small) on favorise repos
+                # (no extra adjustment here; handled by remaining_on/remaining_rest logic)
+
+                scored.append((score, j, reasons))
+
+            # Trier par score (plus petit = mieux), puis par assign_count pour briser égalité
+            scored.sort(key=lambda x: (x[0], state[x[1]]['assign_count'], x[1]))
+
+            # Choix du meilleur candidat
+            best_score, best_j, best_reasons = scored[0]
+
+            # Si le meilleur candidat est en repos strict et qu'il reste d'autres candidats "acceptables", essayer le suivant
+            # (on veut minimiser assignations pendant rest si possible)
+            if 'still_resting' in best_reasons and len(scored) > 1:
+                # chercher un candidat non 'still_resting'
+                alt = None
+                for sc in scored:
+                    if 'still_resting' not in sc[2]:
+                        alt = sc
+                        break
+                if alt is not None:
+                    best_score, best_j, best_reasons = alt
+
+            # Enfin, on attribue best_j à cette ligne
+            assigned_j = best_j
+            planning[assigned_j].append({
                 'wod': wod,
                 'lane': row['Lane'],
                 'athlete': row['Competitor'],
@@ -238,14 +283,99 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation):
                 'heat': row['Heat #'],
                 'heat_num': heat['heat_num']
             })
+            used_in_this_heat.add(assigned_j)
+
+            # Mettre à jour l'état du juge
+            s = state[assigned_j]
+
+            # Si il venait du heat précédent (idx-1) et était en 'on' -> on continue le block
+            if s['last_heat_idx'] == idx - 1 and s['mode'] == 'on' and s['remaining_on'] > 0:
+                s['remaining_on'] -= 1
+                s['last_heat_idx'] = idx
+                s['assign_count'] += 1
+                # si remaining_on devient 0 -> passer en rest
+                if s['remaining_on'] == 0:
+                    s['mode'] = 'rest'
+                    s['remaining_rest'] = PREFERRED_REST
+            else:
+                # Il démarre (ou redémarre) un bloc on ici
+                # Si il était en rest avec remaining_rest>0, on diminue remaining_rest (exception case)
+                if s['mode'] == 'rest' and s['remaining_rest'] > 0:
+                    # On autorise cette affectation uniquement si aucun autre candidat "valide" existait.
+                    # Ici on considère que l'algorithme de scoring a choisi best_j en dernier recours.
+                    # Réinitialiser la séquence : on le considère démarrant un nouveau bloc on (flexibilité)
+                    s['mode'] = 'on'
+                    s['remaining_on'] = PREFERRED_ON - 1  # on consomme 1 heat maintenant
+                    s['remaining_rest'] = 0
+                    s['last_heat_idx'] = idx
+                    s['assign_count'] += 1
+                    # s['remaining_on'] peut être 1 (s'il doit encore faire 1 heat consecutif)
+                    if s['remaining_on'] == 0:
+                        s['mode'] = 'rest'
+                        s['remaining_rest'] = PREFERRED_REST
+                else:
+                    # cas normal : démarre un bloc on
+                    s['mode'] = 'on'
+                    s['remaining_on'] = PREFERRED_ON - 1  # après avoir pris ce heat
+                    s['last_heat_idx'] = idx
+                    s['assign_count'] += 1
+                    if s['remaining_on'] == 0:
+                        s['mode'] = 'rest'
+                        s['remaining_rest'] = PREFERRED_REST
+
+        # Fin du heat : décrémenter remaining_rest pour tous les juges en repos (car un heat a passé)
+        for j in judges:
+            if state[j]['mode'] == 'rest' and state[j]['remaining_rest'] > 0:
+                # Si le juge n'a été attribué sur le heat courant, alors ce heat compte comme repos
+                if state[j]['last_heat_idx'] != idx:
+                    state[j]['remaining_rest'] -= 1
+                    if state[j]['remaining_rest'] <= 0:
+                        state[j]['mode'] = 'idle'
+                        state[j]['remaining_rest'] = 0
+
+    # Post-check : s'assurer que chaque ligne a été assignée ; si non, faire une passe de rattrapage (fallback)
+    # Construire index de toutes les lignes pour vérifier
+    all_rows = df.to_dict('records')
+    assigned_pairs = set()
+    for j, rows in planning.items():
+        for r in rows:
+            key = (r['wod'], r['heat_num'], r['lane'])
+            assigned_pairs.add(key)
+
+    # Pour toute ligne non assignée, assigner au juge le moins chargé disponible pour le WOD (respect interdit double dans même heat)
+    for row in all_rows:
+        key = (row['Workout'], extract_heat_number(row['Heat #']), row['Lane'])
+        if key not in assigned_pairs:
+            wod = row['Workout']
+            candidats = [j for j in disponibilites.get(wod, []) if j in judges]
+            # filtrer ceux déjà sur ce heat
+            candidats = [j for j in candidats if not any(c['wod'] == wod and c['heat_num'] == key[1] for c in planning[j])]
+            if not candidats:
+                # dernier recours : tous les juges mais pas ceux déjà sur ce heat
+                candidats = [j for j in judges if not any(c['wod'] == wod and c['heat_num'] == key[1] for c in planning[j])]
+            # choisir le moins chargé
+            candidats.sort(key=lambda j: len(planning[j]))
+            if candidats:
+                chosen = candidats[0]
+                planning[chosen].append({
+                    'wod': wod,
+                    'lane': row['Lane'],
+                    'athlete': row['Competitor'],
+                    'division': row['Division'],
+                    'location': row['Workout Location'],
+                    'start': row['Heat Start Time'],
+                    'end': row['Heat End Time'],
+                    'heat': row['Heat #'],
+                    'heat_num': key[1]
+                })
+                assigned_pairs.add(key)
 
     return planning
 
 
-
-# ============================================================
+# ---------------------------
 # MAIN STREAMLIT
-# ============================================================
+# ---------------------------
 def main():
     with st.sidebar:
         st.header("Import des fichiers")
@@ -262,15 +392,15 @@ def main():
             judges_text = st.text_area("Saisir les noms des juges (un par ligne)",
                                        value="Juge 1\nJuge 2\nJuge 3", height=150)
             judges = [j.strip() for j in judges_text.split('\n') if j.strip()]
-            if judges:
-                st.write("Juges saisis:")
-                st.write(judges)
 
         st.header("Paramètres de rotation")
         rotation = st.radio("Mode d'attribution",
                            options=[1, 2],
                            index=1,
                            format_func=lambda x: "1 heat consécutif max" if x == 1 else "2 heats consécutifs + 2 repos")
+
+        st.markdown("**Remarque** : la logique V5 priorise strictement 2-on/2-off quand c'est possible. "
+                    "Si le planning/les disponibilités empêchent cela, le moteur pourra exceptionnellement attribuer 1 ou 3 consécutifs.")
 
     if schedule_file and judges:
         try:
@@ -283,15 +413,15 @@ def main():
                 st.write("Colonnes trouvées:", list(schedule.columns))
                 return
 
+            # Nettoyage / preview
             schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
             schedule['Workout'] = schedule['Workout'].fillna("WOD Inconnu")
-
-            st.subheader("Aperçu des données")
-            st.dataframe(schedule[['Workout', 'Heat #', 'Lane', 'Competitor']].head())
-
             schedule['heat_num'] = schedule['Heat #'].apply(extract_heat_number)
-            wods = sorted(schedule['Workout'].unique())
 
+            st.subheader("Aperçu du planning chargé")
+            st.dataframe(schedule[['Workout', 'Heat #', 'Lane', 'Competitor', 'Heat Start Time']].head(30))
+
+            wods = sorted(schedule['Workout'].unique())
             st.header("Disponibilité des Juges par WOD")
             disponibilites = {}
             cols = st.columns(3)
@@ -306,34 +436,54 @@ def main():
                         disponibilites[wod] = selected
 
             if st.button("Générer le planning"):
+                # vérifier qu'aucun WOD n'est sans juge
                 wods_sans_juge = [w for w, j in disponibilites.items() if not j]
                 if wods_sans_juge:
-                    st.error(f"Aucun juge pour : {', '.join(wods_sans_juge)}")
+                    st.error(f"Les WODs suivants n'ont aucun juge sélectionné : {', '.join(wods_sans_juge)}")
                     return
 
                 planning = assign_judges_equitable(schedule, judges, disponibilites, rotation)
 
-                st.subheader("📊 Analyse des assignations")
-                total_par_juge = {j: len(v) for j, v in planning.items()}
-                cible = sum(total_par_juge.values()) // len(judges)
+                # Afficher résumé
+                st.subheader("📊 Résumé des assignations")
+                totals = {j: len(planning[j]) for j in judges}
+                total_lines = sum(totals.values())
+                cible = total_lines // len(judges) if len(judges) > 0 else 0
 
-                for j, c in sorted(total_par_juge.items(), key=lambda x: x[1], reverse=True):
-                    ecart = c - cible
-                    st.write(f"{'✅' if abs(ecart) <= 1 else '⚠️'} {j}: {c} créneaux ({ecart:+d})")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("Assignations par juge :")
+                    for j in sorted(totals, key=lambda x: totals[x], reverse=True):
+                        st.write(f"{j}: {totals[j]} créneaux (écart {totals[j]-cible:+d})")
 
+                with col2:
+                    # compter séquences consécutives réelles par juge
+                    seqs = {}
+                    for j in judges:
+                        seq_count = 0
+                        entries = sorted(planning[j], key=lambda x: (x['wod'], extract_heat_number(x['heat'])))
+                        for k in range(len(entries) - 1):
+                            if entries[k]['wod'] == entries[k+1]['wod'] and extract_heat_number(entries[k+1]['heat']) - extract_heat_number(entries[k]['heat']) == 1:
+                                seq_count += 1
+                        seqs[j] = seq_count
+                    st.write("Séquences consécutives par juge (estimation) :")
+                    for j in sorted(seqs, key=lambda x: seqs[x], reverse=True):
+                        st.write(f"{j}: {seqs[j]}")
+
+                # Générer PDFs
                 pdf_juges = generate_pdf_tableau(planning)
                 pdf_heats = generate_heat_pdf(planning)
 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp1:
                     pdf_juges.output(tmp1.name)
                     with open(tmp1.name, "rb") as f:
-                        st.download_button("📘 Télécharger planning par juge", f, "planning_juges.pdf")
+                        st.download_button("📘 Télécharger planning par juge", f, "planning_juges.pdf", "application/pdf")
                     os.unlink(tmp1.name)
 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp2:
                     pdf_heats.output(tmp2.name)
                     with open(tmp2.name, "rb") as f:
-                        st.download_button("📗 Télécharger planning par heat", f, "planning_heats.pdf")
+                        st.download_button("📗 Télécharger planning par heat", f, "planning_heats.pdf", "application/pdf")
                     os.unlink(tmp2.name)
 
                 st.success("✅ Plannings générés avec succès !")
@@ -342,7 +492,7 @@ def main():
             st.error("Erreur lors du traitement :")
             st.code(traceback.format_exc())
     else:
-        st.info("Veuillez uploader le fichier de planning et saisir les juges.")
+        st.info("Veuillez uploader le fichier de planning et saisir la liste des juges.")
 
 
 if __name__ == "__main__":
