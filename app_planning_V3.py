@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 7.1 : Équilibrée + 2-on/2-off + Nom compétition dans PDF
+Version 7.2 : Équilibrée + 2-on/2-off + Nom compétition + PDF heats corrigé
 """
 
 import streamlit as st
@@ -18,11 +18,11 @@ import re
 # CONFIG STREAMLIT
 # ========================
 st.set_page_config(page_title="Planning Juges - Crossfit Amiens", layout="wide")
-st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.1)")
+st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.2)")
 
 
 # ========================
-# PDF EXPORTS
+# PDF PAR JUGE
 # ========================
 def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
     """Génère le PDF par juge"""
@@ -85,8 +85,11 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
     return pdf
 
 
+# ========================
+# PDF PAR HEAT (corrigé)
+# ========================
 def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
-    """Génère le PDF par heat"""
+    """Génère le PDF par heat (affiche WOD | Heat | Horaire)"""
     heat_map = defaultdict(lambda: defaultdict(str))
     for juge, creneaux in planning.items():
         for c in creneaux:
@@ -98,8 +101,11 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
     pdf.set_font("Arial", '', 10)
 
     heats = sorted(heat_map.items(), key=lambda x: (x[0][0], x[0][1]))
+
     for i in range(0, len(heats), 2):
         pdf.add_page()
+
+        # Nom de la compétition
         pdf.set_font("Arial", 'B', 14)
         pdf.cell(0, 10, competition_name, 0, 1, 'C')
         pdf.ln(4)
@@ -115,18 +121,19 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
             (wod, heat, start, end, loc), lanes = heats[i + j]
             x = 10 + j * (col_width + spacing)
 
+            # En-tête du bloc heat : WOD | Heat | Horaire
             pdf.set_font("Arial", 'B', 10)
             pdf.set_xy(x, 25)
-            # Affichage : WOD | Heat | Horaire
             pdf.cell(col_width, row_height, f"{wod} | {heat} | {start}-{end}", 1, 0, 'C', fill=True)
             pdf.ln(row_height)
-            pdf.set_x(x)
-            pdf.set_font("Arial", 'I', 8)
-            pdf.cell(col_width, row_height - 2, f"({loc})", 0, 1, 'C')  # Lieu affiché en petit
+
+            # En-tête tableau
             pdf.set_x(x)
             pdf.set_font("Arial", 'B', 9)
             pdf.cell(col_width / 2, row_height, "Lane", 1, 0, 'C', fill=True)
             pdf.cell(col_width / 2, row_height, "Juge", 1, 1, 'C', fill=True)
+
+            # Contenu
             pdf.set_font("Arial", '', 9)
             for lane, juge in sorted(lanes.items()):
                 pdf.set_x(x)
@@ -250,7 +257,7 @@ def main():
         schedule_file = st.file_uploader("Planning (Excel)", type=["xlsx"])
 
         st.header("🏋️‍♀️ Nom de la compétition")
-        competition_name = st.text_input("Nom à afficher sur les PDF", "Urban Battle 2025")
+        competition_name = st.text_input("Nom à afficher sur les PDF", "Unicorn and the Beast 2025")
 
         st.header("👩‍⚖️ Juges")
         judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
