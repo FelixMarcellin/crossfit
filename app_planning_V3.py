@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 7.7 : Corrections alignement et format
+Version 7.8 : Largeur optimisée pour toute la feuille
 """
 
 import streamlit as st
@@ -18,7 +18,7 @@ import re
 # CONFIG STREAMLIT
 # ========================
 st.set_page_config(page_title="Planning Juges - Crossfit Amiens", layout="wide")
-st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.7)")
+st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.8)")
 
 
 # ========================
@@ -59,12 +59,15 @@ def clean_text(text):
 
 
 # ========================
-# PDF PAR JUGE (CORRIGÉ - portrait et alignement)
+# PDF PAR JUGE (LARGEUR OPTIMISÉE)
 # ========================
 def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
-    """Génère le PDF par juge en mode portrait avec alignement corrigé"""
-    pdf = FPDF(orientation='P')  # MODE PORTRAIT
-    pdf.set_auto_page_break(auto=True, margin=10)
+    """Génère le PDF par juge avec largeur optimisée pour toute la feuille"""
+    pdf = FPDF(orientation='P')
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    # Largeur totale disponible (A4 portrait : 210mm - marges)
+    total_width = 180
     
     for juge, creneaux in planning.items():
         if not creneaux:
@@ -84,72 +87,77 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
         pdf.add_page()
         
         # En-tête
+        pdf.set_font("Arial", 'B', 16)
+        pdf.cell(0, 10, clean_text(competition_name), 0, 1, 'C')
         pdf.set_font("Arial", 'B', 14)
-        pdf.cell(0, 8, clean_text(competition_name), 0, 1, 'C')
-        pdf.set_font("Arial", 'B', 12)
-        pdf.cell(0, 8, f"Planning : {clean_text(juge)}", 0, 1, 'C')
-        pdf.ln(5)
+        pdf.cell(0, 10, f"Planning : {clean_text(juge)}", 0, 1, 'C')
+        pdf.ln(8)
 
-        # En-têtes de colonnes CORRIGÉES - "Lane" au lieu de "Ln"
+        # En-têtes de colonnes avec largeurs optimisées
         headers = ["Heure", "Lane", "WOD", "Heat", "Athlete", "Division"]
-        # Largeurs optimisées pour portrait
-        col_widths = [22, 10, 18, 12, 65, 25]
+        
+        # Largeurs proportionnelles à l'importance des colonnes
+        col_widths = [
+            total_width * 0.12,  # Heure : 12%
+            total_width * 0.08,  # Lane : 8%
+            total_width * 0.12,  # WOD : 12%
+            total_width * 0.10,  # Heat : 10%
+            total_width * 0.40,  # Athlete : 40% (plus large)
+            total_width * 0.18   # Division : 18%
+        ]
+        
+        # Convertir en entiers
+        col_widths = [int(w) for w in col_widths]
         
         pdf.set_fill_color(211, 211, 211)
-        pdf.set_font("Arial", 'B', 8)
+        pdf.set_font("Arial", 'B', 10)
         
-        # DESSINER LA PREMIÈRE LIGNE CORRECTEMENT
-        x_start = pdf.get_x()
-        y_start = pdf.get_y()
-        
+        # Dessiner la ligne d'en-tête
         for h, w in zip(headers, col_widths):
-            pdf.cell(w, 6, h, 1, 0, 'C', fill=True)
+            pdf.cell(w, 8, h, 1, 0, 'C', fill=True)
         pdf.ln()
         
         # Contenu du tableau
-        pdf.set_font("Arial", '', 7)
+        pdf.set_font("Arial", '', 9)
         row_colors = [(255, 255, 255), (240, 240, 240)]
         
         for i, c in enumerate(creneaux):
             # Vérifier si on dépasse la page
-            if pdf.get_y() > 270:  # Bas de page en portrait
+            if pdf.get_y() > 260:
                 pdf.add_page()
                 # Ré-afficher les en-têtes
-                pdf.set_font("Arial", 'B', 8)
+                pdf.set_font("Arial", 'B', 10)
                 pdf.set_fill_color(211, 211, 211)
-                x_start = pdf.get_x()
-                y_start = pdf.get_y()
                 for h, w in zip(headers, col_widths):
-                    pdf.cell(w, 6, h, 1, 0, 'C', fill=True)
+                    pdf.cell(w, 8, h, 1, 0, 'C', fill=True)
                 pdf.ln()
-                pdf.set_font("Arial", '', 7)
+                pdf.set_font("Arial", '', 9)
             
             pdf.set_fill_color(*row_colors[i % 2])
             
-            # FORMATAGE DES DONNÉES - HEURE SUR UNE SEULE LIGNE
-            start = clean_text(str(c['start']))[:5]  # HH:MM
-            end = clean_text(str(c['end']))[:5]      # HH:MM
+            # Formatage des données
+            start = clean_text(str(c['start']))[:5]
+            end = clean_text(str(c['end']))[:5]
             
-            # Tronquer les textes longs
+            # Tronquer moins agressivement grâce à la largeur augmentée
             athlete_name = clean_text(str(c['athlete']))
-            if len(athlete_name) > 30:
-                athlete_name = athlete_name[:30] + "..."
+            if len(athlete_name) > 45:
+                athlete_name = athlete_name[:45] + "..."
                 
             division_name = clean_text(str(c['division']))
-            if len(division_name) > 15:
-                division_name = division_name[:15] + "..."
+            if len(division_name) > 25:
+                division_name = division_name[:25] + "..."
             
             wod_name = clean_text(str(c['wod']))
-            if len(wod_name) > 10:
-                wod_name = wod_name[:10] + ".."
+            if len(wod_name) > 15:
+                wod_name = wod_name[:15] + "..."
             
             heat_name = clean_text(str(c['heat']))
-            if len(heat_name) > 8:
-                heat_name = heat_name[:8] + ".."
+            if len(heat_name) > 12:
+                heat_name = heat_name[:12] + "..."
             
-            # HEURE SUR UNE SEULE LIGNE : "HH:MM-HH:MM"
             vals = [
-                f"{start}-{end}",  # UNE SEULE LIGNE
+                f"{start}-{end}",
                 clean_text(str(c['lane'])),
                 wod_name,
                 heat_name,
@@ -157,16 +165,16 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
                 division_name
             ]
             
-            # Dessiner chaque cellule sur la même ligne
+            # Dessiner chaque cellule
             for v, w in zip(vals, col_widths):
-                pdf.cell(w, 5, v, 1, 0, 'C', fill=True)
+                pdf.cell(w, 7, v, 1, 0, 'C', fill=True)
             pdf.ln()
 
         # Pied de page
-        pdf.ln(3)
-        pdf.set_font("Arial", 'I', 7)
+        pdf.ln(5)
+        pdf.set_font("Arial", 'I', 9)
         total_wods = len({c['wod'] for c in creneaux})
-        pdf.cell(0, 5, f"Total : {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
+        pdf.cell(0, 8, f"Total : {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
 
@@ -196,9 +204,10 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
         pdf.cell(0, 10, clean_text(competition_name), 0, 1, 'C')
         pdf.ln(4)
 
-        col_width = 85
+        # Largeurs adaptées à la largeur totale
+        col_width = 90  # Augmenté pour utiliser plus d'espace
         row_height = 8
-        spacing_x = 15
+        spacing_x = 10
         
         # Grand espacement entre les rangées
         y_positions = [25, 120]
