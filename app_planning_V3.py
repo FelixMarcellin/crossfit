@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 7.4 : Équilibrée + 2-on/2-off + Nom compétition + PDF heats corrigé + Unicode complet
+Version 7.5 : Équilibrée + 2-on/2-off + Nom compétition + PDF heats corrigé + Unicode complet + Page unique par juge
 """
 
 import streamlit as st
@@ -19,7 +19,7 @@ import base64
 # CONFIG STREAMLIT
 # ========================
 st.set_page_config(page_title="Planning Juges - Crossfit Amiens", layout="wide")
-st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.4)")
+st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.5)")
 
 
 # ========================
@@ -60,16 +60,13 @@ def clean_text(text):
 
 
 # ========================
-# PDF PAR JUGE (avec gestion Unicode)
+# PDF PAR JUGE (optimisé pour une page)
 # ========================
 def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
-    """Génère le PDF par juge avec gestion robuste de l'encodage"""
+    """Génère le PDF par juge avec optimisation pour tenir sur une page"""
     pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_auto_page_break(auto=True, margin=10)  # Marge réduite
     
-    # Utiliser la police standard (pas besoin d'ajouter une police spéciale)
-    # FPDF gère mieux l'ASCII que l'Unicode
-
     for juge, creneaux in planning.items():
         if not creneaux:
             continue
@@ -86,50 +83,92 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
         creneaux = sorted(creneaux, key=lambda c: (c.get('wod', ''), parse_time(c.get('start', ''))))
 
         pdf.add_page()
-        pdf.set_font("Arial", 'B', 16)
-        pdf.cell(0, 10, clean_text(competition_name), 0, 1, 'C')
-        pdf.set_font("Arial", 'B', 14)
-        pdf.cell(0, 10, f"Planning : {clean_text(juge)}", 0, 1, 'C')
-        pdf.ln(10)
+        
+        # En-tête plus compact
+        pdf.set_font("Arial", 'B', 14)  # Taille réduite
+        pdf.cell(0, 8, clean_text(competition_name), 0, 1, 'C')  # Hauteur réduite
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 8, f"Planning : {clean_text(juge)}", 0, 1, 'C')
+        pdf.ln(5)  # Espacement réduit
 
-        headers = ["Heure", "Lane", "WOD", "Heat #", "Athlete", "Division"]
-        col_widths = [35, 15, 25, 15, 60, 35]
+        # En-têtes de colonnes plus compactes
+        headers = ["Heure", "Lane", "WOD", "Heat", "Athlete", "Division"]
+        # Largeurs de colonnes optimisées
+        col_widths = [30, 12, 20, 12, 50, 25]
+        
         pdf.set_fill_color(211, 211, 211)
-        pdf.set_font("Arial", 'B', 10)
+        pdf.set_font("Arial", 'B', 8)  # Police plus petite pour les en-têtes
         for h, w in zip(headers, col_widths):
-            pdf.cell(w, 10, h, 1, 0, 'C', fill=True)
+            pdf.cell(w, 6, h, 1, 0, 'C', fill=True)  # Hauteur réduite
         pdf.ln()
 
-        pdf.set_font("Arial", '', 9)
+        # Contenu du tableau plus compact
+        pdf.set_font("Arial", '', 7)  # Police plus petite
         row_colors = [(255, 255, 255), (240, 240, 240)]
+        
         for i, c in enumerate(creneaux):
+            # Vérifier si on dépasse la page (environ 40 lignes par page)
+            if pdf.get_y() > 250:  # Si on approche du bas de page
+                pdf.add_page()
+                # Ré-afficher les en-têtes sur la nouvelle page
+                pdf.set_font("Arial", 'B', 8)
+                pdf.set_fill_color(211, 211, 211)
+                for h, w in zip(headers, col_widths):
+                    pdf.cell(w, 6, h, 1, 0, 'C', fill=True)
+                pdf.ln()
+                pdf.set_font("Arial", '', 7)
+            
             pdf.set_fill_color(*row_colors[i % 2])
             start = clean_text(str(c['start']))
             end = clean_text(str(c['end']))
             
-            # Nettoyer toutes les valeurs
+            # Nettoyer et tronquer les textes longs
+            athlete_name = clean_text(str(c['athlete']))
+            if len(athlete_name) > 25:
+                athlete_name = athlete_name[:25] + "..."
+                
+            division_name = clean_text(str(c['division']))
+            if len(division_name) > 15:
+                division_name = division_name[:15] + "..."
+            
+            wod_name = clean_text(str(c['wod']))
+            if len(wod_name) > 12:
+                wod_name = wod_name[:12] + "..."
+            
             vals = [
-                f"{start} - {end}",
+                f"{start}\n{end}",  # Heure sur 2 lignes
                 clean_text(str(c['lane'])),
-                clean_text(str(c['wod'])),
+                wod_name,
                 clean_text(str(c['heat'])),
-                clean_text(str(c['athlete']))[:30],  # Limiter la longueur
-                clean_text(str(c['division']))
+                athlete_name,
+                division_name
             ]
             
+            # Hauteur de ligne adaptative pour le texte multiligne
+            line_height = 6
+            max_lines = 1
+            
+            # Vérifier si l'heure a besoin de 2 lignes
+            if len(f"{start}\n{end}") > 8:
+                max_lines = 2
+            
+            # Ajuster la hauteur de ligne si nécessaire
+            current_y = pdf.get_y()
             for v, w in zip(vals, col_widths):
-                # Utiliser une méthode plus sûre pour éviter les erreurs d'encodage
-                try:
-                    pdf.cell(w, 10, v, 1, 0, 'C', fill=True)
-                except:
-                    # En cas d'erreur, utiliser un texte de secours
-                    pdf.cell(w, 10, "N/A", 1, 0, 'C', fill=True)
-            pdf.ln()
+                if v == f"{start}\n{end}" and max_lines > 1:
+                    # Gérer le texte multiligne pour l'heure
+                    pdf.multi_cell(w, line_height, v, 1, 'C', fill=True)
+                    pdf.set_xy(pdf.get_x() + w, current_y)
+                else:
+                    pdf.cell(w, line_height * max_lines, v, 1, 0, 'C', fill=True)
+            
+            pdf.ln(line_height * max_lines)
 
-        pdf.ln(6)
-        pdf.set_font("Arial", 'I', 9)
+        # Pied de page compact
+        pdf.ln(3)
+        pdf.set_font("Arial", 'I', 7)
         total_wods = len({c['wod'] for c in creneaux})
-        pdf.cell(0, 8, f"Total : {len(creneaux)} creneaux sur {total_wods} WODs", 0, 1)
+        pdf.cell(0, 5, f"Total : {len(creneaux)} creneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
 
