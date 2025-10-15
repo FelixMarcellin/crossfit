@@ -18,7 +18,7 @@ import re
 # CONFIG STREAMLIT
 # ========================
 st.set_page_config(page_title="Planning Juges - Crossfit Amiens", layout="wide")
-st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (f.marcellin")
+st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (f.marcellin)")
 
 
 # ========================
