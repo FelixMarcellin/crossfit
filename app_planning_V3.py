@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 7.6 : Optimisation maximale pour tenir sur une page
+Version 7.7 : Corrections alignement et format
 """
 
 import streamlit as st
@@ -18,7 +18,7 @@ import re
 # CONFIG STREAMLIT
 # ========================
 st.set_page_config(page_title="Planning Juges - Crossfit Amiens", layout="wide")
-st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.6)")
+st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (Version 7.7)")
 
 
 # ========================
@@ -59,12 +59,12 @@ def clean_text(text):
 
 
 # ========================
-# PDF PAR JUGE (OPTIMISATION MAXIMALE)
+# PDF PAR JUGE (CORRIGÉ - portrait et alignement)
 # ========================
 def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
-    """Génère le PDF par juge avec optimisation maximale pour une page"""
-    pdf = FPDF(orientation='L')  # Mode PAYSAGE pour plus de largeur
-    pdf.set_auto_page_break(auto=True, margin=8)  # Marges très réduites
+    """Génère le PDF par juge en mode portrait avec alignement corrigé"""
+    pdf = FPDF(orientation='P')  # MODE PORTRAIT
+    pdf.set_auto_page_break(auto=True, margin=10)
     
     for juge, creneaux in planning.items():
         if not creneaux:
@@ -83,69 +83,73 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
 
         pdf.add_page()
         
-        # EN-TÊTE ULTRA COMPACT
-        pdf.set_font("Arial", 'B', 12)  # Taille réduite
-        pdf.cell(0, 6, clean_text(competition_name), 0, 1, 'C')  # Hauteur minimale
-        pdf.set_font("Arial", 'B', 10)
-        pdf.cell(0, 5, f"Juge: {clean_text(juge)}", 0, 1, 'C')
-        pdf.ln(3)  # Espacement minimal
+        # En-tête
+        pdf.set_font("Arial", 'B', 14)
+        pdf.cell(0, 8, clean_text(competition_name), 0, 1, 'C')
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 8, f"Planning : {clean_text(juge)}", 0, 1, 'C')
+        pdf.ln(5)
 
-        # EN-TÊTES DE COLONNES OPTIMISÉES
-        headers = ["Heure", "Ln", "WOD", "Heat", "Athlete", "Division"]
-        # Largeurs optimisées pour mode paysage
-        col_widths = [25, 8, 15, 12, 75, 25]  # Plus de place pour les noms d'athlètes
+        # En-têtes de colonnes CORRIGÉES - "Lane" au lieu de "Ln"
+        headers = ["Heure", "Lane", "WOD", "Heat", "Athlete", "Division"]
+        # Largeurs optimisées pour portrait
+        col_widths = [22, 10, 18, 12, 65, 25]
         
         pdf.set_fill_color(211, 211, 211)
-        pdf.set_font("Arial", 'B', 7)  # Police très petite pour les en-têtes
+        pdf.set_font("Arial", 'B', 8)
+        
+        # DESSINER LA PREMIÈRE LIGNE CORRECTEMENT
+        x_start = pdf.get_x()
+        y_start = pdf.get_y()
+        
         for h, w in zip(headers, col_widths):
-            pdf.cell(w, 5, h, 1, 0, 'C', fill=True)  # Hauteur minimale
+            pdf.cell(w, 6, h, 1, 0, 'C', fill=True)
         pdf.ln()
-
-        # CONTENU ULTRA COMPACT
-        pdf.set_font("Arial", '', 6)  # Police très petite
+        
+        # Contenu du tableau
+        pdf.set_font("Arial", '', 7)
         row_colors = [(255, 255, 255), (240, 240, 240)]
         
-        ligne_count = 0
         for i, c in enumerate(creneaux):
-            ligne_count += 1
-            
-            # Vérifier si on dépasse la page (environ 50 lignes en mode paysage)
-            if pdf.get_y() > 180:  # Marge basse en paysage
+            # Vérifier si on dépasse la page
+            if pdf.get_y() > 270:  # Bas de page en portrait
                 pdf.add_page()
                 # Ré-afficher les en-têtes
-                pdf.set_font("Arial", 'B', 7)
+                pdf.set_font("Arial", 'B', 8)
                 pdf.set_fill_color(211, 211, 211)
+                x_start = pdf.get_x()
+                y_start = pdf.get_y()
                 for h, w in zip(headers, col_widths):
-                    pdf.cell(w, 5, h, 1, 0, 'C', fill=True)
+                    pdf.cell(w, 6, h, 1, 0, 'C', fill=True)
                 pdf.ln()
-                pdf.set_font("Arial", '', 6)
-                ligne_count = 0
+                pdf.set_font("Arial", '', 7)
             
             pdf.set_fill_color(*row_colors[i % 2])
             
-            # FORMATAGE DES DONNÉES OPTIMISÉ
-            start = clean_text(str(c['start']))[:5]  # Garder seulement HH:MM
-            end = clean_text(str(c['end']))[:5]      # Garder seulement HH:MM
+            # FORMATAGE DES DONNÉES - HEURE SUR UNE SEULE LIGNE
+            start = clean_text(str(c['start']))[:5]  # HH:MM
+            end = clean_text(str(c['end']))[:5]      # HH:MM
             
-            # Tronquer intelligemment les textes longs
+            # Tronquer les textes longs
             athlete_name = clean_text(str(c['athlete']))
-            if len(athlete_name) > 35:
-                athlete_name = athlete_name[:35] + "..."
+            if len(athlete_name) > 30:
+                athlete_name = athlete_name[:30] + "..."
                 
             division_name = clean_text(str(c['division']))
             if len(division_name) > 15:
                 division_name = division_name[:15] + "..."
             
             wod_name = clean_text(str(c['wod']))
-            if len(wod_name) > 8:
-                wod_name = wod_name[:8] + ".."
+            if len(wod_name) > 10:
+                wod_name = wod_name[:10] + ".."
             
             heat_name = clean_text(str(c['heat']))
             if len(heat_name) > 8:
                 heat_name = heat_name[:8] + ".."
             
+            # HEURE SUR UNE SEULE LIGNE : "HH:MM-HH:MM"
             vals = [
-                f"{start}\n{end}",    # Heure sur 2 lignes compactes
+                f"{start}-{end}",  # UNE SEULE LIGNE
                 clean_text(str(c['lane'])),
                 wod_name,
                 heat_name,
@@ -153,27 +157,16 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
                 division_name
             ]
             
-            # Hauteur fixe pour toutes les lignes
-            line_height = 4.5  # Hauteur minimale
-            
-            # Dessiner chaque cellule
-            current_y = pdf.get_y()
+            # Dessiner chaque cellule sur la même ligne
             for v, w in zip(vals, col_widths):
-                if v == f"{start}\n{end}":
-                    # Cellule heure avec texte multiligne
-                    pdf.multi_cell(w, line_height/2, v, 1, 'C', fill=True)
-                    pdf.set_xy(pdf.get_x() + w, current_y)
-                else:
-                    # Cellule normale
-                    pdf.cell(w, line_height, v, 1, 0, 'C', fill=True)
-            
-            pdf.ln(line_height)
+                pdf.cell(w, 5, v, 1, 0, 'C', fill=True)
+            pdf.ln()
 
-        # PIED DE PAGE ULTRA COMPACT
-        pdf.ln(2)
-        pdf.set_font("Arial", 'I', 6)
+        # Pied de page
+        pdf.ln(3)
+        pdf.set_font("Arial", 'I', 7)
         total_wods = len({c['wod'] for c in creneaux})
-        pdf.cell(0, 4, f"Total: {len(creneaux)} creneaux / {total_wods} WODs", 0, 1)
+        pdf.cell(0, 5, f"Total : {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
 
