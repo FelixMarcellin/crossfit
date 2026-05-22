@@ -7,6 +7,7 @@ Version 8.0 : Choix flexible du système on/off
 import streamlit as st
 import pandas as pd
 from fpdf import FPDF
+from PIL import Image
 import tempfile
 import os
 from collections import defaultdict
@@ -58,12 +59,37 @@ def clean_text(text):
     return text
 
 
+
+
+class WatermarkPDF(FPDF):
+    def __init__(self, logo_path=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.logo_path = logo_path
+
+    def header(self):
+        if self.logo_path and os.path.exists(self.logo_path):
+            try:
+                # FPDF transparency (fpdf2). Ignore if unavailable
+                if hasattr(self, 'set_alpha'):
+                    self.set_alpha(0.5)
+                img = Image.open(self.logo_path)
+                w, h = img.size
+                ratio = h / w
+                img_w = 90
+                img_h = img_w * ratio
+                x = (210 - img_w) / 2
+                y = (297 - img_h) / 2
+                self.image(self.logo_path, x=x, y=y, w=img_w)
+                if hasattr(self, 'set_alpha'):
+                    self.set_alpha(1)
+            except Exception:
+                pass
 # ========================
 # PDF PAR JUGE (LARGEUR OPTIMISÉE)
 # ========================
-def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
+def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) -> FPDF:
     """Génère le PDF par juge avec largeur optimisée pour toute la feuille"""
-    pdf = FPDF(orientation='P')
+    pdf = WatermarkPDF(logo_path=logo_path, orientation='P')
     pdf.set_auto_page_break(auto=True, margin=15)
     
     # Largeur totale disponible (A4 portrait : 210mm - marges)
@@ -82,7 +108,7 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
                 except Exception:
                     return pd.NaT
 
-        creneaux = sorted(creneaux, key=lambda c: (c.get('wod', ''), parse_time(c.get('start', ''))))
+        creneaux = sorted(creneaux, key=lambda c: parse_time(c.get('start', ''))) # continuité horaire
 
         pdf.add_page()
         
@@ -182,7 +208,7 @@ def generate_pdf_tableau(planning: dict, competition_name: str) -> FPDF:
 # ========================
 # PDF PAR HEAT (4 tableaux par page)
 # ========================
-def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
+def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> FPDF:
     """Génère le PDF par heat (4 tableaux par page - grand espacement)"""
     heat_map = defaultdict(lambda: defaultdict(str))
     for juge, creneaux in planning.items():
@@ -190,7 +216,7 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
             key = (c['wod'], c['heat'], c['start'], c['end'], c['location'])
             heat_map[key][int(c['lane'])] = juge
 
-    pdf = FPDF()
+    pdf = WatermarkPDF(logo_path=logo_path)
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.set_font("Arial", '', 10)
 
@@ -204,13 +230,11 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
         pdf.cell(0, 10, clean_text(competition_name), 0, 1, 'C')
         pdf.ln(4)
 
-        # Largeurs adaptées à la largeur totale
-        col_width = 90  # Augmenté pour utiliser plus d'espace
-        row_height = 8
-        spacing_x = 10
-        
-        # Grand espacement entre les rangées
-        y_positions = [25, 120]
+        # Layout dynamique pour éviter tout chevauchement
+        col_width = 92
+        row_height = 7
+        spacing_x = 6
+        top_y = 25
 
         for j in range(4):
             if i + j >= len(heats):
@@ -222,7 +246,14 @@ def generate_heat_pdf(planning: dict, competition_name: str) -> FPDF:
             row = j // 2
             
             x = 10 + col * (col_width + spacing_x)
-            y_start = y_positions[row]
+            lanes_count = len(lanes)
+            block_height = row_height * (2 + lanes_count) + 8
+            if row == 0:
+                y_start = top_y
+                if col == 1:
+                    first_row_height = max(first_row_height, block_height) if 'first_row_height' in locals() else block_height
+            else:
+                y_start = top_y + (first_row_height if 'first_row_height' in locals() else 90) + 12
 
             # En-tête du bloc heat
             pdf.set_font("Arial", 'B', 10)
@@ -372,6 +403,9 @@ def main():
         st.header("🏋️‍♀️ Nom de la compétition")
         competition_name = st.text_input("Nom à afficher sur les PDF", "Unicorn and the Beast 2025")
 
+        st.header("🖼️ Logo / Filigrane")
+        logo_file = st.file_uploader("Logo pour filigrane PDF", type=["png","jpg","jpeg"])
+
         st.header("👩‍⚖️ Juges")
         judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
         if judges_file:
@@ -426,6 +460,11 @@ def main():
                             disponibilites[wod] = st.multiselect("Juges disponibles", judges, key=f"multi_{wod}")
 
             if st.button("🦄 Générer le planning"):
+                logo_path = None
+                if logo_file:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(logo_file.name)[1]) as lf:
+                        lf.write(logo_file.read())
+                        logo_path = lf.name
                 planning = assign_judges_equitable(schedule, judges, disponibilites, rotation_system)
 
                 st.subheader("📊 Équilibre des assignations")
@@ -442,8 +481,8 @@ def main():
                     st.write(f"{emoji} {j}: {counts[j]} créneaux ({ecart:+d})")
 
                 try:
-                    pdf_juges = generate_pdf_tableau(planning, competition_name)
-                    pdf_heats = generate_heat_pdf(planning, competition_name)
+                    pdf_juges = generate_pdf_tableau(planning, competition_name, logo_path)
+                    pdf_heats = generate_heat_pdf(planning, competition_name, logo_path)
                     
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t1:
                         pdf_juges.output(t1.name)
