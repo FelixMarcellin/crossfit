@@ -71,25 +71,20 @@ class WatermarkPDF(FPDF):
         """Ajoute un filigrane centré AU-DESSUS du contenu"""
         if self.logo_path and os.path.exists(self.logo_path):
             try:
-                # Taille et position centrées
                 logo_width = 120
                 x = (210 - logo_width) / 2
                 y = (297 - logo_width) / 2
 
-                # Transparence 50%
                 if hasattr(self, "set_alpha"):
                     self.set_alpha(0.5)
 
-                # Filigrane au-dessus des éléments
                 self.image(self.logo_path, x=x, y=y, w=logo_width)
 
-                # Reset transparence
                 if hasattr(self, "set_alpha"):
                     self.set_alpha(1)
 
             except Exception as e:
                 print(f"Erreur filigrane : {e}")
-
 
 # ========================
 # PDF PAR JUGE (LARGEUR OPTIMISÉE)
@@ -115,10 +110,9 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
                 except Exception:
                     return pd.NaT
 
-        creneaux = sorted(creneaux, key=lambda c: (c.get('wod', ''), parse_time(c.get('start', ''))))
+        creneaux = sorted(creneaux, key=lambda c: parse_time(c.get('start', '')))
 
         pdf.add_page()
-        pdf.add_watermark()
         pdf.add_watermark()
         
         # En-tête
@@ -160,7 +154,6 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
             # Vérifier si on dépasse la page
             if pdf.get_y() > 260:
                 pdf.add_page()
-        pdf.add_watermark()
                 pdf.add_watermark()
                 # Ré-afficher les en-têtes
                 pdf.set_font("Arial", 'B', 10)
@@ -247,8 +240,7 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
         row_height = 8
         spacing_x = 10
         
-        # Grand espacement entre les rangées
-        y_positions = [25, 120]
+        current_y = 25
 
         for j in range(4):
             if i + j >= len(heats):
@@ -284,6 +276,10 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
                 pdf.set_xy(x, y_pos)
                 pdf.cell(col_width / 2, row_height, clean_text(str(lane)), border=1, align='C')
                 pdf.cell(col_width / 2, row_height, clean_text(juge_name), border=1, align='C')
+
+            if col == 1 or j == len(heats[i:i+4]) - 1:
+                block_height = (len(lanes) + 2) * row_height + 12
+                current_y += block_height
 
     return pdf
 
@@ -433,7 +429,6 @@ def main():
         )
         
         st.info(f"🔄 Système sélectionné : {rotation_system['name']}")
-
         st.header("🖼️ Logo filigrane")
         logo_file = st.file_uploader("Uploader un logo", type=["png", "jpg", "jpeg"])
 
