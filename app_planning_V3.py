@@ -211,7 +211,7 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
         pdf.ln(5)
         pdf.set_font("Arial", 'I', 9)
         total_wods = len({c['wod'] for c in creneaux})
-        pdf.cell(0, 8, f"Total : {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
+        pdf.cell(0, 8, f"Total : {len(creneaux)} créneaux ", 0, 1)
 
     return pdf
 
