@@ -1,7 +1,14 @@
 # -*- coding: utf-8 -*-
 """
+Created on Fri May 22 14:02:27 2026
+
+@author: felima
+"""
+
+# -*- coding: utf-8 -*-
+"""
 Planning Juges équilibré - Crossfit Amiens
-Version 9.1 : Filigrane transparent fonctionnel (superposition correcte)
+Version 9.2 : Filigrane en superposition transparente (OVERLAY)
 """
 
 import streamlit as st
@@ -50,44 +57,56 @@ def clean_text(text):
 
 
 # ========================
-# PDF AVEC FILIGRANE (méthode correcte)
+# PDF AVEC FILIGRANE EN SUPERPOSITION (OVERLAY)
 # ========================
 class WatermarkPDF(FPDF):
     def __init__(self, logo_path=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logo_path = logo_path
-        self.watermark_added = False
+        self.set_auto_page_break(auto=True, margin=15)
 
-    def add_watermark(self):
-        """Ajoute le filigrane en arrière-plan (à appeler APRÈS add_page)"""
-        if self.logo_path and os.path.exists(self.logo_path) and not self.watermark_added:
+    def add_watermark_overlay(self):
+        """
+        Ajoute le filigrane en superposition (PAR-DESSUS le contenu)
+        Utilise set_alpha() pour la transparence
+        """
+        if self.logo_path and os.path.exists(self.logo_path):
             try:
-                # Sauvegarder la position actuelle
+                # Sauvegarder la position et la police
                 current_y = self.get_y()
                 current_x = self.get_x()
+                current_font = self.font_family
+                current_size = self.font_size_pt
                 
                 # Calculer les dimensions pour centrer
                 page_width = 210
                 page_height = 297
-                logo_width = 80  # Taille raisonnable pour le filigrane
+                logo_width = 80  # Taille du filigrane
                 x = (page_width - logo_width) / 2
                 y = (page_height - logo_width) / 2
                 
-                # Ajouter l'image avec transparence
-                # Note: FPDF utilise l'alpha du PNG automatiquement si le PNG a un canal alpha
+                # Appliquer la transparence (0.3 = 30% opaque, 70% transparent)
+                # Note: set_alpha nécessite fpdf>=2.7.0
+                if hasattr(self, 'set_alpha'):
+                    self.set_alpha(0.25)  # Très transparent
+                
+                # Ajouter l'image
                 self.image(self.logo_path, x=x, y=y, w=logo_width)
+                
+                # Rétablir l'alpha normal
+                if hasattr(self, 'set_alpha'):
+                    self.set_alpha(1)
                 
                 # Restaurer la position
                 self.set_y(current_y)
                 self.set_x(current_x)
-                self.watermark_added = True
+                
+                # Restaurer la police si elle avait été modifiée
+                if current_font:
+                    self.set_font(current_font, '', current_size)
+                    
             except Exception as e:
-                print(f"Erreur filigrane: {e}")
-
-    def start_new_page(self):
-        """Crée une nouvelle page et réinitialise le flag du filigrane"""
-        self.add_page()
-        self.watermark_added = False
+                print(f"Erreur filigrane overlay: {e}")
 
 
 # ========================
@@ -95,7 +114,6 @@ class WatermarkPDF(FPDF):
 # ========================
 def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) -> FPDF:
     pdf = WatermarkPDF(logo_path=logo_path, orientation='P')
-    pdf.set_auto_page_break(auto=True, margin=15)
     total_width = 180
     
     for juge, creneaux in planning.items():
@@ -113,8 +131,9 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
 
         creneaux = sorted(creneaux, key=lambda c: parse_time(c.get('start', '')))
 
-        pdf.start_new_page()
-        pdf.add_watermark()
+        pdf.add_page()
+        
+        # ========== 1. ÉCRIRE TOUT LE CONTENU D'ABORD ==========
         
         # En-tête
         pdf.set_font("Arial", 'B', 16)
@@ -124,11 +143,10 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
         pdf.ln(8)
 
         headers = ["Heure", "Lane", "WOD", "Heat", "Athlete", "Division"]
-        col_widths = [22, 14, 22, 18, 72, 32]  # mm - optimisé pour A4
+        col_widths = [22, 14, 22, 18, 72, 32]  # mm
         
         pdf.set_fill_color(211, 211, 211)
         pdf.set_font("Arial", 'B', 10)
-        
         for h, w in zip(headers, col_widths):
             pdf.cell(w, 8, h, 1, 0, 'C', fill=True)
         pdf.ln()
@@ -138,8 +156,8 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
         
         for i, c in enumerate(creneaux):
             if pdf.get_y() > 260:
-                pdf.start_new_page()
-                pdf.add_watermark()
+                pdf.add_page()
+                # Ré-afficher les en-têtes sur nouvelle page
                 pdf.set_font("Arial", 'B', 10)
                 pdf.set_fill_color(211, 211, 211)
                 for h, w in zip(headers, col_widths):
@@ -181,6 +199,9 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
         pdf.set_font("Arial", 'I', 9)
         total_wods = len({c['wod'] for c in creneaux})
         pdf.cell(0, 8, f"Total : {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
+        
+        # ========== 2. AJOUTER LE FILIGRANE EN OVERLAY (PAR-DESSUS) ==========
+        pdf.add_watermark_overlay()
 
     return pdf
 
@@ -196,8 +217,6 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
             heat_map[key][int(c['lane'])] = juge
 
     pdf = WatermarkPDF(logo_path=logo_path, orientation='P')
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.set_font("Arial", '', 8)
 
     heats = sorted(heat_map.items(), key=lambda x: (x[0][0], int(x[0][1]) if str(x[0][1]).isdigit() else 0))
 
@@ -207,9 +226,10 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
     header_height = 12
     
     for i in range(0, len(heats), 4):
-        pdf.start_new_page()
-        pdf.add_watermark()
+        pdf.add_page()
 
+        # ========== 1. ÉCRIRE TOUT LE CONTENU D'ABORD ==========
+        
         pdf.set_font("Arial", 'B', 12)
         pdf.cell(0, 8, clean_text(competition_name), 0, 1, 'C')
         pdf.ln(4)
@@ -257,6 +277,9 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
                     juge_display = juge_display[:16] + ".."
                 pdf.cell(col_width * 0.65, row_height, juge_display, border=1, align='C')
                 row_num += 1
+        
+        # ========== 2. AJOUTER LE FILIGRANE EN OVERLAY ==========
+        pdf.add_watermark_overlay()
 
     return pdf
 
@@ -371,7 +394,7 @@ def main():
         schedule_file = st.file_uploader("Planning (Excel)", type=["xlsx"])
 
         st.header("🏋️‍♀️ Nom de la compétition")
-        competition_name = st.text_input("Nom à afficher sur les PDF", "Unicorn and the Beast 2025")
+        competition_name = st.text_input("Nom à afficher sur les PDF")
 
         st.header("👩‍⚖️ Juges")
         judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
@@ -396,9 +419,9 @@ def main():
         )
         
         st.info(f"🔄 Système sélectionné : {rotation_system['name']}")
-        st.header("🖼️ Logo filigrane")
-        st.warning("⚠️ Le logo doit être un PNG avec fond transparent pour un meilleur rendu")
-        logo_file = st.file_uploader("Uploader un logo", type=["png", "jpg", "jpeg"])
+        st.header("🖼️ Logo filigrane (overlay transparent)")
+        st.warning("⚠️ Utilisez un PNG avec fond transparent pour un meilleur rendu")
+        logo_file = st.file_uploader("Uploader un logo", type=["png"])
 
         logo_path = None
         if logo_file:
