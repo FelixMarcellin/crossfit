@@ -402,7 +402,7 @@ def main():
         st.header("🏋️‍♀️ Nom de la compétition")
         competition_name = st.text_input("Nom à afficher sur les PDF", "Unicorn")
 
-        st.header("👩‍⚖️ Juges")
+        st.header("🙅‍♂️ Juges")
         judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
         if judges_file:
             judges_df = pd.read_csv(judges_file, header=None, encoding='latin1')
