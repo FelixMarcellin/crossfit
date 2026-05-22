@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 9.5 : Logo en bas de page (bien visible)
+Version 9.6 : Lecture directe de la feuille "Heats" + logo en bas de page
 """
 
 import streamlit as st
@@ -50,7 +50,61 @@ def clean_text(text):
 
 
 # ========================
-# PDF AVEC LOGO EN BAS DE PAGE (BIEN VISIBLE)
+# LECTURE DU FICHIER EXCEL (feuille "Heats")
+# ========================
+def load_schedule_from_excel(uploaded_file):
+    """Lit le fichier Excel et extrait la feuille 'Heats' avec les bonnes colonnes"""
+    # Lire toutes les feuilles
+    xls = pd.ExcelFile(uploaded_file)
+    
+    # Chercher la feuille "Heats" (insensible à la casse)
+    sheet_name = None
+    for name in xls.sheet_names:
+        if name.lower() == "heats":
+            sheet_name = name
+            break
+    
+    if sheet_name is None:
+        st.error("❌ Feuille 'Heats' introuvable dans le fichier Excel.")
+        return None
+    
+    # Lire la feuille
+    df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
+    
+    # Vérifier les colonnes nécessaires (adapté à la structure du fichier brut)
+    # Colonnes attendues: Lane, Competitor, Division, Workout, Workout Location, Heat #, Heat Start Time, Heat End Time
+    required_cols = ['Lane', 'Competitor', 'Division', 'Workout', 'Workout Location', 'Heat #', 'Heat Start Time', 'Heat End Time']
+    
+    # Vérifier si toutes les colonnes sont présentes
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        st.error(f"❌ Colonnes manquantes dans la feuille 'Heats': {missing_cols}")
+        st.info("📋 Les colonnes attendues sont: Lane, Competitor, Division, Workout, Workout Location, Heat #, Heat Start Time, Heat End Time")
+        return None
+    
+    # Renommer les colonnes pour correspondre au reste du code
+    df = df.rename(columns={
+        'Workout Location': 'Workout Location',
+        'Heat #': 'Heat #',
+        'Heat Start Time': 'Heat Start Time',
+        'Heat End Time': 'Heat End Time'
+    })
+    
+    # Nettoyer les données
+    for col in ['Workout', 'Competitor', 'Division', 'Workout Location', 'Heat #']:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: clean_text(str(x)) if pd.notna(x) else "")
+    
+    # Filtrer les lignes vides
+    df = df[df['Competitor'].notna()]
+    df = df[df['Competitor'] != ""]
+    df = df[~df['Competitor'].str.contains('EMPTY LANE', na=False)]
+    
+    return df
+
+
+# ========================
+# PDF AVEC LOGO EN BAS DE PAGE
 # ========================
 class FooterLogoPDF(FPDF):
     def __init__(self, logo_path=None, *args, **kwargs):
@@ -59,14 +113,12 @@ class FooterLogoPDF(FPDF):
         self.set_auto_page_break(auto=True, margin=15)
 
     def footer(self):
-        """Pied de page avec logo centré, bien visible"""
+        """Pied de page avec logo centré"""
         if self.logo_path and os.path.exists(self.logo_path):
             try:
-                # Position Y à 15mm du bas de la page (remonté)
-                self.set_y(-80)
-                # Centrer le logo
+                self.set_y(-18)
                 page_width = 210
-                logo_width = 50  # Taille raisonnable
+                logo_width = 25
                 x = (page_width - logo_width) / 2
                 self.image(self.logo_path, x=x, y=self.get_y(), w=logo_width)
             except Exception as e:
@@ -105,7 +157,7 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
         pdf.ln(8)
 
         headers = ["Heure", "Lane", "WOD", "Heat", "Athlete", "Division"]
-        col_widths = [22, 14, 22, 18, 72, 32]  # mm
+        col_widths = [22, 14, 22, 18, 72, 32]
         
         pdf.set_fill_color(211, 211, 211)
         pdf.set_font("Arial", 'B', 10)
@@ -159,7 +211,7 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
         pdf.ln(5)
         pdf.set_font("Arial", 'I', 9)
         total_wods = len({c['wod'] for c in creneaux})
-        pdf.cell(0, 8, f"Total : {len(creneaux)} créneaux ", 0, 1)
+        pdf.cell(0, 8, f"Total : {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
 
     return pdf
 
@@ -343,7 +395,8 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 # ========================
 def main():
     with st.sidebar:
-        st.header("📂 Fichiers d'entrée")
+        st.header("📂 Fichier d'entrée")
+        st.info("📌 Le fichier Excel doit contenir une feuille nommée **'Heats'** avec les colonnes: Lane, Competitor, Division, Workout, Workout Location, Heat #, Heat Start Time, Heat End Time")
         schedule_file = st.file_uploader("Planning (Excel)", type=["xlsx"])
 
         st.header("🏋️‍♀️ Nom de la compétition")
@@ -385,18 +438,16 @@ def main():
 
     if schedule_file and judges:
         try:
-            schedule = pd.read_excel(schedule_file, engine='openpyxl')
-            required = ['Workout', 'Lane', 'Competitor', 'Division', 'Workout Location',
-                        'Heat Start Time', 'Heat End Time', 'Heat #']
-            if not all(c in schedule.columns for c in required):
-                st.error("⚠️ Colonnes manquantes dans le fichier Excel.")
-                return
-
-            for col in ['Workout', 'Competitor', 'Division', 'Workout Location', 'Heat #']:
-                if col in schedule.columns:
-                    schedule[col] = schedule[col].apply(lambda x: clean_text(str(x)) if pd.notna(x) else "")
+            # Lire directement la feuille "Heats"
+            schedule = load_schedule_from_excel(schedule_file)
             
-            schedule = schedule[~schedule['Competitor'].str.contains('EMPTY LANE', na=False)]
+            if schedule is None:
+                st.stop()
+            
+            if schedule.empty:
+                st.error("❌ Aucune donnée trouvée dans la feuille 'Heats'")
+                st.stop()
+            
             wods = sorted(schedule['Workout'].dropna().unique())
             
             st.header("📅 Disponibilités des juges")
@@ -450,10 +501,10 @@ def main():
 
         except Exception as e:
             st.error(f"❌ Erreur lors de la lecture du fichier: {str(e)}")
-            st.info("💡 Vérifiez que le fichier Excel est valide")
+            st.info("💡 Vérifiez que le fichier Excel contient bien une feuille nommée 'Heats'")
 
     else:
-        st.info("👉 Veuillez importer un fichier Excel et saisir la liste des juges.")
+        st.info("👉 Veuillez importer un fichier Excel contenant une feuille 'Heats' et saisir la liste des juges.")
 
 
 if __name__ == "__main__":
