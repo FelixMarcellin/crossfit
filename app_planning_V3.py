@@ -400,7 +400,7 @@ def main():
         schedule_file = st.file_uploader("Planning (Excel)", type=["xlsx"])
 
         st.header("🏋️‍♀️ Nom de la compétition")
-        competition_name = st.text_input("Nom à afficher sur les PDF", "Unicorn Throwdown 2026")
+        competition_name = st.text_input("Nom à afficher sur les PDF", "Unicorn")
 
         st.header("👩‍⚖️ Juges")
         judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
