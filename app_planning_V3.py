@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 8.0 : Choix flexible du système on/off
+Version 9.0 : Filigrane transparent et mise en page compacte des heats
 """
 
 import streamlit as st
@@ -58,9 +58,8 @@ def clean_text(text):
     return text
 
 
-
 # ========================
-# PDF AVEC FILIGRANE
+# PDF AVEC FILIGRANE TRANSPARENT (AU-DESSUS DU CONTENU)
 # ========================
 class WatermarkPDF(FPDF):
     def __init__(self, logo_path=None, *args, **kwargs):
@@ -68,23 +67,31 @@ class WatermarkPDF(FPDF):
         self.logo_path = logo_path
 
     def add_watermark(self):
-        """Ajoute un filigrane centré AU-DESSUS du contenu"""
+        """Ajoute un filigrane transparent AU-DESSUS du contenu existant"""
         if self.logo_path and os.path.exists(self.logo_path):
             try:
-                logo_width = 120
-                x = (210 - logo_width) / 2
-                y = (297 - logo_width) / 2
-
-                if hasattr(self, "set_alpha"):
-                    self.set_alpha(0.5)
-
-                self.image(self.logo_path, x=x, y=y, w=logo_width)
-
-                if hasattr(self, "set_alpha"):
-                    self.set_alpha(1)
-
+                # Sauvegarder l'état actuel
+                current_y = self.get_y()
+                current_x = self.get_x()
+                
+                # Calculer les dimensions pour centrer
+                page_width = 210  # A4 width in mm
+                page_height = 297  # A4 height in mm
+                logo_width = 100  # Largeur du filigrane en mm
+                x = (page_width - logo_width) / 2
+                y = (page_height - logo_width) / 2
+                
+                # Utiliser l'API image avec transparence
+                # FPDF utilise l'alpha uniquement pour les PNG avec canal alpha
+                self.image(self.logo_path, x=x, y=y, w=logo_width, link='')
+                
+                # Restaurer la position
+                self.set_y(current_y)
+                self.set_x(current_x)
+                
             except Exception as e:
                 print(f"Erreur filigrane : {e}")
+
 
 # ========================
 # PDF PAR JUGE (LARGEUR OPTIMISÉE)
@@ -113,6 +120,8 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
         creneaux = sorted(creneaux, key=lambda c: parse_time(c.get('start', '')))
 
         pdf.add_page()
+        
+        # Ajouter le filigrane APRÈS avoir commencé la page
         pdf.add_watermark()
         
         # En-tête
@@ -210,74 +219,88 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
 
 
 # ========================
-# PDF PAR HEAT (4 tableaux par page)
+# PDF PAR HEAT (4 tableaux compacts par page)
 # ========================
 def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> FPDF:
-    """Génère le PDF par heat (4 tableaux par page - grand espacement)"""
+    """Génère le PDF par heat avec 4 tableaux compacts par page"""
+    # Regrouper les juges par (wod, heat, start, end)
     heat_map = defaultdict(lambda: defaultdict(str))
     for juge, creneaux in planning.items():
         for c in creneaux:
-            key = (c['wod'], c['heat'], c['start'], c['end'], c['location'])
+            key = (c['wod'], c['heat'], c['start'], c['end'])
             heat_map[key][int(c['lane'])] = juge
 
     pdf = WatermarkPDF(logo_path=logo_path)
     pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.set_font("Arial", '', 10)
+    pdf.set_font("Arial", '', 8)
 
     heats = sorted(heat_map.items(), key=lambda x: (x[0][0], x[0][1]))
 
+    # Dimensions compactes
+    col_width = 85  # Largeur de chaque tableau (mm)
+    row_height = 6  # Hauteur de ligne réduite
+    spacing_x = 10  # Espace entre les deux tableaux sur la ligne
+    header_height = 10  # Hauteur pour l'en-tête de bloc
+    
     for i in range(0, len(heats), 4):
         pdf.add_page()
         pdf.add_watermark()
 
-        # Nom de la compétition
-        pdf.set_font("Arial", 'B', 14)
-        pdf.cell(0, 10, clean_text(competition_name), 0, 1, 'C')
+        # Nom de la compétition (réduit en taille)
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 8, clean_text(competition_name), 0, 1, 'C')
         pdf.ln(4)
 
-        # Largeurs adaptées à la largeur totale
-        col_width = 90  # Augmenté pour utiliser plus d'espace
-        row_height = 8
-        spacing_x = 10
+        current_y = 25  # Position Y de départ
         
-        current_y = 25
-        
+        # Prendre les 4 prochains heats
         page_heats = heats[i:i+4]
         
-        for j, ((wod, heat, start, end, loc), lanes) in enumerate(page_heats):
-
-            col = j % 2
-    
-            x = 10 + col * (col_width + spacing_x)
-            y_start = current_y
-    
-            # Header bloc
-            pdf.set_font("Arial", 'B', 10)
-            pdf.set_xy(x, y_start)
-    
-            header_text = clean_text(f"{wod} | {heat} | {start}-{end}")
-            pdf.cell(col_width, row_height, header_text, border=1, align='C')
+        for idx, ((wod, heat_num, start, end), lanes) in enumerate(page_heats):
+            # Alternance colonne gauche/droite
+            is_left = (idx % 2 == 0)
+            x = 10 if is_left else 10 + col_width + spacing_x
             
-            # En-tête du tableau
+            # Si on commence une nouvelle ligne (après 2 blocs), descendre
+            if idx == 2:
+                # Calculer la hauteur du bloc précédent
+                prev_lanes = len(heats[i+1][1]) if i+1 < len(heats) else 0
+                max_lanes = max(len(heats[i][1]), len(heats[i+1][1]))
+                block_height = header_height + (max_lanes * row_height) + 4
+                current_y += block_height
+            
+            # Dessiner le bloc
+            y_start = current_y
+            
+            # Entête du heat
+            pdf.set_font("Arial", 'B', 8)
+            pdf.set_xy(x, y_start)
+            header_text = clean_text(f"{wod} | {heat_num} | {start}-{end}")
+            pdf.cell(col_width, row_height, header_text, border=1, align='C', fill=True)
+            
+            # Sous-entête Lane / Juge
+            pdf.set_font("Arial", 'B', 7)
             pdf.set_xy(x, y_start + row_height)
-            pdf.set_font("Arial", 'B', 9)
             pdf.set_fill_color(220, 220, 220)
-            pdf.cell(col_width / 2, row_height, "Lane", border=1, align='C', fill=True)
-            pdf.cell(col_width / 2, row_height, "Juge", border=1, align='C', fill=True)
-
-            # Contenu du tableau
-            pdf.set_font("Arial", '', 9)
+            pdf.cell(col_width * 0.35, row_height, "Lane", border=1, align='C', fill=True)
+            pdf.cell(col_width * 0.65, row_height, "Juge", border=1, align='C', fill=True)
+            
+            # Contenu
+            pdf.set_font("Arial", '', 7)
             pdf.set_fill_color(255, 255, 255)
             
-            for lane_num, (lane, juge_name) in enumerate(sorted(lanes.items())):
-                y_pos = y_start + row_height * 2 + lane_num * row_height
+            row_num = 0
+            for lane_num, juge_name in sorted(lanes.items()):
+                y_pos = y_start + row_height * 2 + row_num * row_height
                 pdf.set_xy(x, y_pos)
-                pdf.cell(col_width / 2, row_height, clean_text(str(lane)), border=1, align='C')
-                pdf.cell(col_width / 2, row_height, clean_text(juge_name), border=1, align='C')
-
-            if col == 1 or j == len(heats[i:i+4]) - 1:
-                block_height = (len(lanes) + 2) * row_height + 12
-                current_y += block_height
+                pdf.cell(col_width * 0.35, row_height, clean_text(str(lane_num)), border=1, align='C')
+                
+                # Tronquer le nom du juge s'il est trop long
+                juge_display = clean_text(juge_name)
+                if len(juge_display) > 18:
+                    juge_display = juge_display[:16] + ".."
+                pdf.cell(col_width * 0.65, row_height, juge_display, border=1, align='C')
+                row_num += 1
 
     return pdf
 
