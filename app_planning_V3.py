@@ -241,22 +241,20 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
         spacing_x = 10
         
         current_y = 25
+        
+        page_heats = heats[i:i+4]
+        
+        for j, ((wod, heat, start, end, loc), lanes) in enumerate(page_heats):
 
-        for j in range(4):
-            if i + j >= len(heats):
-                break
-
-            (wod, heat, start, end, loc), lanes = heats[i + j]
-            
             col = j % 2
-            row = j // 2
-            
+    
             x = 10 + col * (col_width + spacing_x)
-            y_start = y_positions[row]
-
-            # En-tête du bloc heat
+            y_start = current_y
+    
+            # Header bloc
             pdf.set_font("Arial", 'B', 10)
             pdf.set_xy(x, y_start)
+    
             header_text = clean_text(f"{wod} | {heat} | {start}-{end}")
             pdf.cell(col_width, row_height, header_text, border=1, align='C')
             
