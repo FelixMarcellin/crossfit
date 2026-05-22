@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 9.4 : Logo en bas de page (simple et fiable)
+Version 9.5 : Logo en bas de page (bien visible)
 """
 
 import streamlit as st
@@ -50,7 +50,7 @@ def clean_text(text):
 
 
 # ========================
-# PDF AVEC LOGO EN BAS DE PAGE
+# PDF AVEC LOGO EN BAS DE PAGE (BIEN VISIBLE)
 # ========================
 class FooterLogoPDF(FPDF):
     def __init__(self, logo_path=None, *args, **kwargs):
@@ -59,14 +59,14 @@ class FooterLogoPDF(FPDF):
         self.set_auto_page_break(auto=True, margin=15)
 
     def footer(self):
-        """Pied de page avec logo centré en bas"""
+        """Pied de page avec logo centré, bien visible"""
         if self.logo_path and os.path.exists(self.logo_path):
             try:
-                # Position Y à 5mm du bas de la page
-                self.set_y(-12)
+                # Position Y à 15mm du bas de la page (remonté)
+                self.set_y(-25)
                 # Centrer le logo
                 page_width = 210
-                logo_width = 30  # Logo plus petit pour le pied de page
+                logo_width = 30  # Taille raisonnable
                 x = (page_width - logo_width) / 2
                 self.image(self.logo_path, x=x, y=self.get_y(), w=logo_width)
             except Exception as e:
@@ -117,9 +117,8 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
         row_colors = [(255, 255, 255), (240, 240, 240)]
         
         for i, c in enumerate(creneaux):
-            if pdf.get_y() > 250:  # Laisser de la place pour le footer
+            if pdf.get_y() > 250:
                 pdf.add_page()
-                # Ré-afficher les en-têtes
                 pdf.set_font("Arial", 'B', 10)
                 pdf.set_fill_color(211, 211, 211)
                 for h, w in zip(headers, col_widths):
@@ -157,17 +156,16 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
                 pdf.cell(w, 7, v, 1, 0, 'C', fill=True)
             pdf.ln()
 
-        # Pied de page texte
         pdf.ln(5)
         pdf.set_font("Arial", 'I', 9)
         total_wods = len({c['wod'] for c in creneaux})
-        pdf.cell(0, 8, f"Total : {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
+        pdf.cell(0, 8, f"Total : {len(creneaux)} créneaux ", 0, 1)
 
     return pdf
 
 
 # ========================
-# PDF PAR HEAT (4 tableaux compacts par page)
+# PDF PAR HEAT
 # ========================
 def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> FPDF:
     heat_map = defaultdict(lambda: defaultdict(str))
@@ -324,7 +322,6 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             if state[j]['rest'] > 0 and state[j]['last'] != idx:
                 state[j]['rest'] -= 1
 
-    # Équilibrage final
     avg = sum(state[j]['count'] for j in judges) / len(judges)
     over = [j for j in judges if state[j]['count'] > avg + 1]
     under = [j for j in judges if state[j]['count'] < avg - 1]
