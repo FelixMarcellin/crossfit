@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 9.3 : Filigrane avec 50% de transparence (vraie superposition)
+Version 9.4 : Logo en bas de page (simple et fiable)
 """
 
 import streamlit as st
@@ -50,60 +50,34 @@ def clean_text(text):
 
 
 # ========================
-# PDF AVEC FILIGRANE 50% TRANSPARENT
+# PDF AVEC LOGO EN BAS DE PAGE
 # ========================
-class WatermarkPDF(FPDF):
+class FooterLogoPDF(FPDF):
     def __init__(self, logo_path=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logo_path = logo_path
         self.set_auto_page_break(auto=True, margin=15)
 
-    def add_watermark(self):
-        """
-        Ajoute le filigrane avec 50% de transparence
-        L'image est ajoutée APRÈS tout le contenu pour être en superposition
-        """
+    def footer(self):
+        """Pied de page avec logo centré en bas"""
         if self.logo_path and os.path.exists(self.logo_path):
             try:
-                # Sauvegarder la position actuelle
-                current_y = self.get_y()
-                current_x = self.get_x()
-                
-                # Calculer les dimensions pour centrer
-                page_width = 210  # A4 en mm
-                page_height = 297
-                logo_width = 70   # Taille du filigrane (plus petit pour mieux voir)
+                # Position Y à 5mm du bas de la page
+                self.set_y(-12)
+                # Centrer le logo
+                page_width = 210
+                logo_width = 30  # Logo plus petit pour le pied de page
                 x = (page_width - logo_width) / 2
-                y = (page_height - logo_width) / 2
-                
-                # Appliquer la transparence (0.5 = 50% opaque, 50% transparent)
-                # fpdf 2.7.0+ supporte set_alpha()
-                self.set_alpha(0.5)  # 50% de transparence
-                
-                # Ajouter l'image
-                self.image(self.logo_path, x=x, y=y, w=logo_width)
-                
-                # Rétablir l'alpha normal (100% opaque)
-                self.set_alpha(1)
-                
-                # Restaurer la position
-                self.set_y(current_y)
-                self.set_x(current_x)
-                
+                self.image(self.logo_path, x=x, y=self.get_y(), w=logo_width)
             except Exception as e:
-                # Si set_alpha n'est pas disponible, on ajoute sans transparence
-                print(f"Erreur transparence (peut être ignorée): {e}")
-                try:
-                    self.image(self.logo_path, x=x, y=y, w=logo_width)
-                except:
-                    pass
+                print(f"Erreur logo pied de page: {e}")
 
 
 # ========================
 # PDF PAR JUGE
 # ========================
 def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) -> FPDF:
-    pdf = WatermarkPDF(logo_path=logo_path, orientation='P')
+    pdf = FooterLogoPDF(logo_path=logo_path, orientation='P')
     total_width = 180
     
     for juge, creneaux in planning.items():
@@ -122,8 +96,6 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
         creneaux = sorted(creneaux, key=lambda c: parse_time(c.get('start', '')))
 
         pdf.add_page()
-        
-        # ========== 1. ÉCRIRE TOUT LE CONTENU ==========
         
         # En-tête
         pdf.set_font("Arial", 'B', 16)
@@ -145,8 +117,9 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
         row_colors = [(255, 255, 255), (240, 240, 240)]
         
         for i, c in enumerate(creneaux):
-            if pdf.get_y() > 260:
+            if pdf.get_y() > 250:  # Laisser de la place pour le footer
                 pdf.add_page()
+                # Ré-afficher les en-têtes
                 pdf.set_font("Arial", 'B', 10)
                 pdf.set_fill_color(211, 211, 211)
                 for h, w in zip(headers, col_widths):
@@ -184,13 +157,11 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
                 pdf.cell(w, 7, v, 1, 0, 'C', fill=True)
             pdf.ln()
 
+        # Pied de page texte
         pdf.ln(5)
         pdf.set_font("Arial", 'I', 9)
         total_wods = len({c['wod'] for c in creneaux})
         pdf.cell(0, 8, f"Total : {len(creneaux)} créneaux sur {total_wods} WODs", 0, 1)
-        
-        # ========== 2. AJOUTER LE FILIGRANE EN SUPERPOSITION ==========
-        pdf.add_watermark()
 
     return pdf
 
@@ -205,7 +176,7 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
             key = (c['wod'], c['heat'], c['start'], c['end'])
             heat_map[key][int(c['lane'])] = juge
 
-    pdf = WatermarkPDF(logo_path=logo_path, orientation='P')
+    pdf = FooterLogoPDF(logo_path=logo_path, orientation='P')
 
     heats = sorted(heat_map.items(), key=lambda x: (x[0][0], int(x[0][1]) if str(x[0][1]).isdigit() else 0))
 
@@ -217,8 +188,6 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
     for i in range(0, len(heats), 4):
         pdf.add_page()
 
-        # ========== 1. ÉCRIRE TOUT LE CONTENU ==========
-        
         pdf.set_font("Arial", 'B', 12)
         pdf.cell(0, 8, clean_text(competition_name), 0, 1, 'C')
         pdf.ln(4)
@@ -266,9 +235,6 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
                     juge_display = juge_display[:16] + ".."
                 pdf.cell(col_width * 0.65, row_height, juge_display, border=1, align='C')
                 row_num += 1
-        
-        # ========== 2. AJOUTER LE FILIGRANE EN SUPERPOSITION ==========
-        pdf.add_watermark()
 
     return pdf
 
@@ -358,6 +324,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             if state[j]['rest'] > 0 and state[j]['last'] != idx:
                 state[j]['rest'] -= 1
 
+    # Équilibrage final
     avg = sum(state[j]['count'] for j in judges) / len(judges)
     over = [j for j in judges if state[j]['count'] > avg + 1]
     under = [j for j in judges if state[j]['count'] < avg - 1]
@@ -383,7 +350,7 @@ def main():
         schedule_file = st.file_uploader("Planning (Excel)", type=["xlsx"])
 
         st.header("🏋️‍♀️ Nom de la compétition")
-        competition_name = st.text_input("Nom à afficher sur les PDF", "Unicorn")
+        competition_name = st.text_input("Nom à afficher sur les PDF", "Unicorn Throwdown 2026")
 
         st.header("👩‍⚖️ Juges")
         judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
@@ -408,9 +375,9 @@ def main():
         )
         
         st.info(f"🔄 Système sélectionné : {rotation_system['name']}")
-        st.header("🖼️ Logo filigrane (50% transparent)")
-        st.warning("⚠️ Utilisez un PNG avec fond transparent")
-        logo_file = st.file_uploader("Uploader un logo", type=["png"])
+        st.header("🖼️ Logo (pied de page)")
+        st.info("Le logo apparaîtra en bas de chaque page")
+        logo_file = st.file_uploader("Uploader un logo", type=["png", "jpg", "jpeg"])
 
         logo_path = None
         if logo_file:
