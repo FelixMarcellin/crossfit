@@ -116,9 +116,9 @@ class FooterLogoPDF(FPDF):
         """Pied de page avec logo centré"""
         if self.logo_path and os.path.exists(self.logo_path):
             try:
-                self.set_y(-18)
+                self.set_y(-50)
                 page_width = 210
-                logo_width = 25
+                logo_width = 50
                 x = (page_width - logo_width) / 2
                 self.image(self.logo_path, x=x, y=self.get_y(), w=logo_width)
             except Exception as e:
