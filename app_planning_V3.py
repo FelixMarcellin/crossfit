@@ -7,7 +7,6 @@ Version 8.0 : Choix flexible du système on/off
 import streamlit as st
 import pandas as pd
 from fpdf import FPDF
-from PIL import Image
 import tempfile
 import os
 from collections import defaultdict
@@ -60,30 +59,38 @@ def clean_text(text):
 
 
 
-
+# ========================
+# PDF AVEC FILIGRANE
+# ========================
 class WatermarkPDF(FPDF):
     def __init__(self, logo_path=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logo_path = logo_path
 
-    def header(self):
+    def add_watermark(self):
+        """Ajoute un filigrane centré AU-DESSUS du contenu"""
         if self.logo_path and os.path.exists(self.logo_path):
             try:
-                # FPDF transparency (fpdf2). Ignore if unavailable
-                if hasattr(self, 'set_alpha'):
+                # Taille et position centrées
+                logo_width = 120
+                x = (210 - logo_width) / 2
+                y = (297 - logo_width) / 2
+
+                # Transparence 50%
+                if hasattr(self, "set_alpha"):
                     self.set_alpha(0.5)
-                img = Image.open(self.logo_path)
-                w, h = img.size
-                ratio = h / w
-                img_w = 90
-                img_h = img_w * ratio
-                x = (210 - img_w) / 2
-                y = (297 - img_h) / 2
-                self.image(self.logo_path, x=x, y=y, w=img_w)
-                if hasattr(self, 'set_alpha'):
+
+                # Filigrane au-dessus des éléments
+                self.image(self.logo_path, x=x, y=y, w=logo_width)
+
+                # Reset transparence
+                if hasattr(self, "set_alpha"):
                     self.set_alpha(1)
-            except Exception:
-                pass
+
+            except Exception as e:
+                print(f"Erreur filigrane : {e}")
+
+
 # ========================
 # PDF PAR JUGE (LARGEUR OPTIMISÉE)
 # ========================
@@ -108,9 +115,11 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
                 except Exception:
                     return pd.NaT
 
-        creneaux = sorted(creneaux, key=lambda c: parse_time(c.get('start', ''))) # continuité horaire
+        creneaux = sorted(creneaux, key=lambda c: (c.get('wod', ''), parse_time(c.get('start', ''))))
 
         pdf.add_page()
+        pdf.add_watermark()
+        pdf.add_watermark()
         
         # En-tête
         pdf.set_font("Arial", 'B', 16)
@@ -151,6 +160,8 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
             # Vérifier si on dépasse la page
             if pdf.get_y() > 260:
                 pdf.add_page()
+        pdf.add_watermark()
+                pdf.add_watermark()
                 # Ré-afficher les en-têtes
                 pdf.set_font("Arial", 'B', 10)
                 pdf.set_fill_color(211, 211, 211)
@@ -224,17 +235,20 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
 
     for i in range(0, len(heats), 4):
         pdf.add_page()
+        pdf.add_watermark()
 
         # Nom de la compétition
         pdf.set_font("Arial", 'B', 14)
         pdf.cell(0, 10, clean_text(competition_name), 0, 1, 'C')
         pdf.ln(4)
 
-        # Layout dynamique pour éviter tout chevauchement
-        col_width = 92
-        row_height = 7
-        spacing_x = 6
-        top_y = 25
+        # Largeurs adaptées à la largeur totale
+        col_width = 90  # Augmenté pour utiliser plus d'espace
+        row_height = 8
+        spacing_x = 10
+        
+        # Grand espacement entre les rangées
+        y_positions = [25, 120]
 
         for j in range(4):
             if i + j >= len(heats):
@@ -246,14 +260,7 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
             row = j // 2
             
             x = 10 + col * (col_width + spacing_x)
-            lanes_count = len(lanes)
-            block_height = row_height * (2 + lanes_count) + 8
-            if row == 0:
-                y_start = top_y
-                if col == 1:
-                    first_row_height = max(first_row_height, block_height) if 'first_row_height' in locals() else block_height
-            else:
-                y_start = top_y + (first_row_height if 'first_row_height' in locals() else 90) + 12
+            y_start = y_positions[row]
 
             # En-tête du bloc heat
             pdf.set_font("Arial", 'B', 10)
@@ -403,9 +410,6 @@ def main():
         st.header("🏋️‍♀️ Nom de la compétition")
         competition_name = st.text_input("Nom à afficher sur les PDF", "Unicorn and the Beast 2025")
 
-        st.header("🖼️ Logo / Filigrane")
-        logo_file = st.file_uploader("Logo pour filigrane PDF", type=["png","jpg","jpeg"])
-
         st.header("👩‍⚖️ Juges")
         judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
         if judges_file:
@@ -429,6 +433,17 @@ def main():
         )
         
         st.info(f"🔄 Système sélectionné : {rotation_system['name']}")
+
+        st.header("🖼️ Logo filigrane")
+        logo_file = st.file_uploader("Uploader un logo", type=["png", "jpg", "jpeg"])
+
+        logo_path = None
+        if logo_file:
+            temp_logo = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            temp_logo.write(logo_file.read())
+            temp_logo.close()
+            logo_path = temp_logo.name
+
 
     if schedule_file and judges:
         try:
@@ -460,11 +475,6 @@ def main():
                             disponibilites[wod] = st.multiselect("Juges disponibles", judges, key=f"multi_{wod}")
 
             if st.button("🦄 Générer le planning"):
-                logo_path = None
-                if logo_file:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(logo_file.name)[1]) as lf:
-                        lf.write(logo_file.read())
-                        logo_path = lf.name
                 planning = assign_judges_equitable(schedule, judges, disponibilites, rotation_system)
 
                 st.subheader("📊 Équilibre des assignations")
