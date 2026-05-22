@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 9.0 : Filigrane transparent et mise en page compacte des heats
+Version 9.1 : Filigrane transparent fonctionnel (superposition correcte)
 """
 
 import streamlit as st
@@ -10,7 +10,6 @@ from fpdf import FPDF
 import tempfile
 import os
 from collections import defaultdict
-import traceback
 import re
 
 
@@ -18,20 +17,16 @@ import re
 # CONFIG STREAMLIT
 # ========================
 st.set_page_config(page_title="Planning Juges - Crossfit Amiens", layout="wide")
-st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄 (f.marcellin)")
+st.title("🏋️‍♂️ Planning Juges - Crossfit Amiens 🦄")
 
 
 # ========================
 # FONCTION NETTOYAGE TEXTE ROBUSTE
 # ========================
 def clean_text(text):
-    """Nettoie le texte des caractères spéciaux problématiques de manière robuste"""
     if pd.isna(text):
         return ""
-    
     text = str(text)
-    
-    # Liste complète des remplacements
     replacements = {
         'à': 'a', 'á': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a', 'å': 'a',
         'è': 'e', 'é': 'e', 'ê': 'e', 'ë': 'e',
@@ -48,60 +43,59 @@ def clean_text(text):
         'œ': 'oe', 'æ': 'ae', '€': 'E', '£': 'GBP',
         '§': 'S', 'µ': 'u', '°': 'deg', '²': '2', '³': '3'
     }
-    
     for old, new in replacements.items():
         text = text.replace(old, new)
-    
-    # Supprimer tout caractère non-ASCII restant
     text = text.encode('ascii', 'ignore').decode('ascii')
-    
     return text
 
 
 # ========================
-# PDF AVEC FILIGRANE TRANSPARENT (AU-DESSUS DU CONTENU)
+# PDF AVEC FILIGRANE (méthode correcte)
 # ========================
 class WatermarkPDF(FPDF):
     def __init__(self, logo_path=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logo_path = logo_path
+        self.watermark_added = False
 
     def add_watermark(self):
-        """Ajoute un filigrane transparent AU-DESSUS du contenu existant"""
-        if self.logo_path and os.path.exists(self.logo_path):
+        """Ajoute le filigrane en arrière-plan (à appeler APRÈS add_page)"""
+        if self.logo_path and os.path.exists(self.logo_path) and not self.watermark_added:
             try:
-                # Sauvegarder l'état actuel
+                # Sauvegarder la position actuelle
                 current_y = self.get_y()
                 current_x = self.get_x()
                 
                 # Calculer les dimensions pour centrer
-                page_width = 210  # A4 width in mm
-                page_height = 297  # A4 height in mm
-                logo_width = 100  # Largeur du filigrane en mm
+                page_width = 210
+                page_height = 297
+                logo_width = 80  # Taille raisonnable pour le filigrane
                 x = (page_width - logo_width) / 2
                 y = (page_height - logo_width) / 2
                 
-                # Utiliser l'API image avec transparence
-                # FPDF utilise l'alpha uniquement pour les PNG avec canal alpha
-                self.image(self.logo_path, x=x, y=y, w=logo_width, link='')
+                # Ajouter l'image avec transparence
+                # Note: FPDF utilise l'alpha du PNG automatiquement si le PNG a un canal alpha
+                self.image(self.logo_path, x=x, y=y, w=logo_width)
                 
                 # Restaurer la position
                 self.set_y(current_y)
                 self.set_x(current_x)
-                
+                self.watermark_added = True
             except Exception as e:
-                print(f"Erreur filigrane : {e}")
+                print(f"Erreur filigrane: {e}")
+
+    def start_new_page(self):
+        """Crée une nouvelle page et réinitialise le flag du filigrane"""
+        self.add_page()
+        self.watermark_added = False
 
 
 # ========================
-# PDF PAR JUGE (LARGEUR OPTIMISÉE)
+# PDF PAR JUGE
 # ========================
 def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) -> FPDF:
-    """Génère le PDF par juge avec largeur optimisée pour toute la feuille"""
     pdf = WatermarkPDF(logo_path=logo_path, orientation='P')
     pdf.set_auto_page_break(auto=True, margin=15)
-    
-    # Largeur totale disponible (A4 portrait : 210mm - marges)
     total_width = 180
     
     for juge, creneaux in planning.items():
@@ -111,17 +105,15 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
         def parse_time(x):
             try:
                 return pd.to_datetime(x, format='%H:%M')
-            except Exception:
+            except:
                 try:
                     return pd.to_datetime(str(x))
-                except Exception:
+                except:
                     return pd.NaT
 
         creneaux = sorted(creneaux, key=lambda c: parse_time(c.get('start', '')))
 
-        pdf.add_page()
-        
-        # Ajouter le filigrane APRÈS avoir commencé la page
+        pdf.start_new_page()
         pdf.add_watermark()
         
         # En-tête
@@ -131,40 +123,23 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
         pdf.cell(0, 10, f"Planning : {clean_text(juge)}", 0, 1, 'C')
         pdf.ln(8)
 
-        # En-têtes de colonnes avec largeurs optimisées
         headers = ["Heure", "Lane", "WOD", "Heat", "Athlete", "Division"]
-        
-        # Largeurs proportionnelles à l'importance des colonnes
-        col_widths = [
-            total_width * 0.12,  # Heure : 12%
-            total_width * 0.08,  # Lane : 8%
-            total_width * 0.12,  # WOD : 12%
-            total_width * 0.10,  # Heat : 10%
-            total_width * 0.40,  # Athlete : 40% (plus large)
-            total_width * 0.18   # Division : 18%
-        ]
-        
-        # Convertir en entiers
-        col_widths = [int(w) for w in col_widths]
+        col_widths = [22, 14, 22, 18, 72, 32]  # mm - optimisé pour A4
         
         pdf.set_fill_color(211, 211, 211)
         pdf.set_font("Arial", 'B', 10)
         
-        # Dessiner la ligne d'en-tête
         for h, w in zip(headers, col_widths):
             pdf.cell(w, 8, h, 1, 0, 'C', fill=True)
         pdf.ln()
         
-        # Contenu du tableau
         pdf.set_font("Arial", '', 9)
         row_colors = [(255, 255, 255), (240, 240, 240)]
         
         for i, c in enumerate(creneaux):
-            # Vérifier si on dépasse la page
             if pdf.get_y() > 260:
-                pdf.add_page()
+                pdf.start_new_page()
                 pdf.add_watermark()
-                # Ré-afficher les en-têtes
                 pdf.set_font("Arial", 'B', 10)
                 pdf.set_fill_color(211, 211, 211)
                 for h, w in zip(headers, col_widths):
@@ -174,26 +149,20 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
             
             pdf.set_fill_color(*row_colors[i % 2])
             
-            # Formatage des données
             start = clean_text(str(c['start']))[:5]
             end = clean_text(str(c['end']))[:5]
-            
-            # Tronquer moins agressivement grâce à la largeur augmentée
             athlete_name = clean_text(str(c['athlete']))
-            if len(athlete_name) > 45:
-                athlete_name = athlete_name[:45] + "..."
-                
+            if len(athlete_name) > 35:
+                athlete_name = athlete_name[:32] + "..."
             division_name = clean_text(str(c['division']))
-            if len(division_name) > 25:
-                division_name = division_name[:25] + "..."
-            
+            if len(division_name) > 20:
+                division_name = division_name[:17] + "..."
             wod_name = clean_text(str(c['wod']))
             if len(wod_name) > 15:
-                wod_name = wod_name[:15] + "..."
-            
+                wod_name = wod_name[:12] + "..."
             heat_name = clean_text(str(c['heat']))
-            if len(heat_name) > 12:
-                heat_name = heat_name[:12] + "..."
+            if len(heat_name) > 10:
+                heat_name = heat_name[:8] + "..."
             
             vals = [
                 f"{start}-{end}",
@@ -204,12 +173,10 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
                 division_name
             ]
             
-            # Dessiner chaque cellule
             for v, w in zip(vals, col_widths):
                 pdf.cell(w, 7, v, 1, 0, 'C', fill=True)
             pdf.ln()
 
-        # Pied de page
         pdf.ln(5)
         pdf.set_font("Arial", 'I', 9)
         total_wods = len({c['wod'] for c in creneaux})
@@ -222,63 +189,54 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
 # PDF PAR HEAT (4 tableaux compacts par page)
 # ========================
 def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> FPDF:
-    """Génère le PDF par heat avec 4 tableaux compacts par page"""
-    # Regrouper les juges par (wod, heat, start, end)
     heat_map = defaultdict(lambda: defaultdict(str))
     for juge, creneaux in planning.items():
         for c in creneaux:
             key = (c['wod'], c['heat'], c['start'], c['end'])
             heat_map[key][int(c['lane'])] = juge
 
-    pdf = WatermarkPDF(logo_path=logo_path)
+    pdf = WatermarkPDF(logo_path=logo_path, orientation='P')
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.set_font("Arial", '', 8)
 
-    heats = sorted(heat_map.items(), key=lambda x: (x[0][0], x[0][1]))
+    heats = sorted(heat_map.items(), key=lambda x: (x[0][0], int(x[0][1]) if str(x[0][1]).isdigit() else 0))
 
-    # Dimensions compactes
-    col_width = 85  # Largeur de chaque tableau (mm)
-    row_height = 6  # Hauteur de ligne réduite
-    spacing_x = 10  # Espace entre les deux tableaux sur la ligne
-    header_height = 10  # Hauteur pour l'en-tête de bloc
+    col_width = 85
+    row_height = 6
+    spacing_x = 10
+    header_height = 12
     
     for i in range(0, len(heats), 4):
-        pdf.add_page()
+        pdf.start_new_page()
         pdf.add_watermark()
 
-        # Nom de la compétition (réduit en taille)
         pdf.set_font("Arial", 'B', 12)
         pdf.cell(0, 8, clean_text(competition_name), 0, 1, 'C')
         pdf.ln(4)
 
-        current_y = 25  # Position Y de départ
+        current_y = 25
         
-        # Prendre les 4 prochains heats
         page_heats = heats[i:i+4]
         
         for idx, ((wod, heat_num, start, end), lanes) in enumerate(page_heats):
-            # Alternance colonne gauche/droite
             is_left = (idx % 2 == 0)
             x = 10 if is_left else 10 + col_width + spacing_x
             
-            # Si on commence une nouvelle ligne (après 2 blocs), descendre
             if idx == 2:
-                # Calculer la hauteur du bloc précédent
                 prev_lanes = len(heats[i+1][1]) if i+1 < len(heats) else 0
                 max_lanes = max(len(heats[i][1]), len(heats[i+1][1]))
                 block_height = header_height + (max_lanes * row_height) + 4
                 current_y += block_height
             
-            # Dessiner le bloc
             y_start = current_y
             
-            # Entête du heat
+            # En-tête du heat
             pdf.set_font("Arial", 'B', 8)
             pdf.set_xy(x, y_start)
             header_text = clean_text(f"{wod} | {heat_num} | {start}-{end}")
             pdf.cell(col_width, row_height, header_text, border=1, align='C', fill=True)
             
-            # Sous-entête Lane / Juge
+            # Sous-en-tête
             pdf.set_font("Arial", 'B', 7)
             pdf.set_xy(x, y_start + row_height)
             pdf.set_fill_color(220, 220, 220)
@@ -294,8 +252,6 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
                 y_pos = y_start + row_height * 2 + row_num * row_height
                 pdf.set_xy(x, y_pos)
                 pdf.cell(col_width * 0.35, row_height, clean_text(str(lane_num)), border=1, align='C')
-                
-                # Tronquer le nom du juge s'il est trop long
                 juge_display = clean_text(juge_name)
                 if len(juge_display) > 18:
                     juge_display = juge_display[:16] + ".."
@@ -318,10 +274,9 @@ def extract_heat_number(heat_str):
 
 
 # ========================
-# ATTRIBUTION ÉQUILIBRÉE AVEC SYSTÈME ON/OFF FLEXIBLE
+# ATTRIBUTION ÉQUILIBRÉE
 # ========================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
-    """Attribution équilibrée avec système on/off flexible"""
     planning = {j: [] for j in judges}
     df = schedule.copy()
     df['heat_num'] = df['Heat #'].apply(extract_heat_number)
@@ -334,7 +289,6 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     n_judges = len(judges)
     target = len(df) // n_judges if n_judges > 0 else 0
 
-    # Configuration flexible du système on/off
     ON = rotation_config['on']
     REST = rotation_config['off']
     
@@ -351,17 +305,13 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 if j in used:
                     continue
                 s = state[j]
-                # Éviter doublon même heat
                 if any(c['wod'] == wod and c['heat_num'] == heat['heat_num'] for c in planning[j]):
                     continue
                 score = 0
-                # Priorité pour continuer un bloc en cours
                 if s['last'] == idx - 1 and s['on'] > 0:
-                    score -= 100  # continuer bloc
-                # Pénalité pour ceux en repos
+                    score -= 100
                 if s['rest'] > 0:
-                    score += 50  # éviter ceux en repos
-                # Équilibrage du nombre total de créneaux
+                    score += 50
                 score += max(0, s['count'] - target)
                 score += (s['count'] - target) * 2
                 if score < best_score:
@@ -374,7 +324,6 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 'lane': clean_text(str(row['Lane'])),
                 'athlete': clean_text(str(row['Competitor'])),
                 'division': clean_text(str(row['Division'])),
-                'location': clean_text(str(row['Workout Location'])),
                 'start': clean_text(str(row['Heat Start Time'])),
                 'end': clean_text(str(row['Heat End Time'])),
                 'heat': clean_text(str(row['Heat #'])),
@@ -382,7 +331,6 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             })
             used.add(best)
 
-            # Mise à jour état avec système flexible
             s = state[best]
             if s['last'] == idx - 1 and s['on'] > 0:
                 s['on'] -= 1
@@ -394,12 +342,10 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             s['last'] = idx
             s['count'] += 1
 
-        # décrémenter repos pour tous les juges
         for j in judges:
             if state[j]['rest'] > 0 and state[j]['last'] != idx:
                 state[j]['rest'] -= 1
 
-    # Équilibrage final
     avg = sum(state[j]['count'] for j in judges) / len(judges)
     over = [j for j in judges if state[j]['count'] > avg + 1]
     under = [j for j in judges if state[j]['count'] < avg - 1]
@@ -451,6 +397,7 @@ def main():
         
         st.info(f"🔄 Système sélectionné : {rotation_system['name']}")
         st.header("🖼️ Logo filigrane")
+        st.warning("⚠️ Le logo doit être un PNG avec fond transparent pour un meilleur rendu")
         logo_file = st.file_uploader("Uploader un logo", type=["png", "jpg", "jpeg"])
 
         logo_path = None
@@ -459,7 +406,6 @@ def main():
             temp_logo.write(logo_file.read())
             temp_logo.close()
             logo_path = temp_logo.name
-
 
     if schedule_file and judges:
         try:
@@ -470,7 +416,6 @@ def main():
                 st.error("⚠️ Colonnes manquantes dans le fichier Excel.")
                 return
 
-            # Nettoyer les données dès la lecture
             for col in ['Workout', 'Competitor', 'Division', 'Workout Location', 'Heat #']:
                 if col in schedule.columns:
                     schedule[col] = schedule[col].apply(lambda x: clean_text(str(x)) if pd.notna(x) else "")
@@ -496,9 +441,8 @@ def main():
                 st.subheader("📊 Équilibre des assignations")
                 counts = {j: len(planning[j]) for j in judges}
                 total = sum(counts.values())
-                target = total // len(judges)
+                target = total // len(judges) if len(judges) > 0 else 0
                 
-                # Afficher le système utilisé
                 st.info(f"**Système de roulement :** {rotation_system['name']}")
                 
                 for j in sorted(counts, key=counts.get, reverse=True):
@@ -530,7 +474,7 @@ def main():
 
         except Exception as e:
             st.error(f"❌ Erreur lors de la lecture du fichier: {str(e)}")
-            st.info("💡 Vérifiez que le fichier Excel est valide et ne contient pas de caractères spéciaux problématiques")
+            st.info("💡 Vérifiez que le fichier Excel est valide")
 
     else:
         st.info("👉 Veuillez importer un fichier Excel et saisir la liste des juges.")
