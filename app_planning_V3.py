@@ -63,7 +63,7 @@ class FooterLogoPDF(FPDF):
         if self.logo_path and os.path.exists(self.logo_path):
             try:
                 # Position Y à 15mm du bas de la page (remonté)
-                self.set_y(-50)
+                self.set_y(-80)
                 # Centrer le logo
                 page_width = 210
                 logo_width = 50  # Taille raisonnable
