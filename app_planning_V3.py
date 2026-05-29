@@ -231,9 +231,9 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
     heats = sorted(
     heat_map.items(),
     key=lambda x: (
-        x[0][0],
-        pd.to_datetime(str(x[0][2])),
-        int(x[0][1]) if str(x[0][1]).isdigit() else 0
+        x[0][0],      # WOD
+        x[0][2],      # heure de début
+        x[0][1]       # numéro heat
     )
 )
 
