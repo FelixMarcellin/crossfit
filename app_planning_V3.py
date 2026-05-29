@@ -229,13 +229,13 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
     pdf = FooterLogoPDF(logo_path=logo_path, orientation='P')
 
     heats = sorted(
-    heat_map.items(),
-    key=lambda x: (
-        x[0][0],      # WOD
-        x[0][2],      # heure de début
-        x[0][1]       # numéro heat
+        heat_map.items(),
+        key=lambda x: (
+            x[0][2],      # 1. Heure de début (Chronologique avant tout)
+            x[0][0],      # 2. Nom du WOD (Si deux WODs commencent en même temps)
+            x[0][1]       # 3. Numéro du Heat
+        )
     )
-)
 
     col_width = 85
     row_height = 6
