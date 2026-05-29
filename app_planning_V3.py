@@ -302,6 +302,64 @@ def extract_heat_number(heat_str):
 
 
 # ========================
+# ATTRIBUTION ÉQUILIBRÉE
+# ========================
+def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
+    planning = {j: [] for j in judges}
+
+    df = schedule.copy()
+    df['heat_num'] = df['Heat #'].apply(extract_heat_number)
+
+    df = df.sort_values(
+        ['Heat Start Time', 'Workout', 'heat_num', 'Lane']
+    ).reset_index(drop=True)
+
+    # ========================
+    # Construction des heats
+    # ========================
+    heats = []
+
+    for (wod, heat_num, start, end), g in df.groupby(
+        ['Workout', 'heat_num', 'Heat Start Time', 'Heat End Time']
+    ):
+
+        heats.append({
+            'wod': wod,
+            'heat_num': heat_num,
+            'start': start,
+            'end': end,
+            'rows': g.to_dict('records')
+        })
+
+    ON = rotation_config['on']
+    OFF = rotation_config['off']
+
+    # ========================
+    # Etat des juges
+    # ========================
+    state = {
+        j: {
+            'worked_streak': 0,
+            'rest_remaining': 0,
+            'count': 0,
+            'last_heat': -999
+        }
+        for j in judges
+    }
+
+    # ========================
+    # Attribution des heats
+    # ========================
+    for idx, heat in enumerate(heats):
+
+        wod = heat['wod']
+        dispo = disponibilites.get(wod, judges)
+
+        used_this_heat = set()
+
+        # ========================
+        # Attribution des lanes
+        # ========================
         for row in heat['rows']:
 
             candidates = []
@@ -310,8 +368,6 @@ def extract_heat_number(heat_str):
 
                 if j in used_this_heat:
                     continue
-
-                s = state[j]
 
                 # Eviter qu'un juge fasse 2 lanes du même heat
                 already_on_heat = any(
@@ -338,15 +394,21 @@ def extract_heat_number(heat_str):
 
                 s = state[j]
 
-                # PRIORITÉ FORTE :
-                # continuer le bloc ON commencé
+                # Continuer un bloc ON déjà commencé
                 if 0 < s['worked_streak'] < ON:
                     return (
                         0,
                         s['count']
                     )
 
-                # PRIORITÉ NORMALE
+                # Léger malus si en OFF
+                if s['rest_remaining'] > 0:
+                    return (
+                        2,
+                        s['count']
+                    )
+
+                # Cas normal
                 return (
                     1,
                     s['count']
