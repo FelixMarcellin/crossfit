@@ -231,67 +231,101 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
     heats = sorted(
     heat_map.items(),
     key=lambda x: (
-        x[0][0],      # WOD
-        x[0][2],      # heure de début
-        x[0][1]       # numéro heat
+        x[0][0],
+        pd.to_datetime(str(x[0][2])),
+        int(x[0][1]) if str(x[0][1]).isdigit() else 0
     )
 )
 
-    col_width = 85
     row_height = 6
-    spacing_x = 10
     header_height = 12
-    
-    for i in range(0, len(heats), 4):
+
+    for (wod, heat_num, start, end), lanes in heats:
+
         pdf.add_page()
 
         pdf.set_font("Arial", 'B', 12)
         pdf.cell(0, 8, clean_text(competition_name), 0, 1, 'C')
-        pdf.ln(4)
+        pdf.ln(8)
 
-        current_y = 25
-        
-        page_heats = heats[i:i+4]
-        
-        for idx, ((wod, heat_num, start, end), lanes) in enumerate(page_heats):
-            is_left = (idx % 2 == 0)
-            x = 10 if is_left else 10 + col_width + spacing_x
-            
-            if idx == 2:
-                prev_lanes = len(heats[i+1][1]) if i+1 < len(heats) else 0
-                max_lanes = max(len(heats[i][1]), len(heats[i+1][1]))
-                block_height = header_height + (max_lanes * row_height) + 4
-                current_y += block_height
-            
-            y_start = current_y
-            
-            # En-tête du heat
-            pdf.set_font("Arial", 'B', 8)
-            pdf.set_xy(x, y_start)
-            header_text = clean_text(f"{wod} | {heat_num} | {start}-{end}")
-            pdf.cell(col_width, row_height, header_text, border=1, align='C', fill=True)
-            
-            # Sous-en-tête
-            pdf.set_font("Arial", 'B', 7)
-            pdf.set_xy(x, y_start + row_height)
-            pdf.set_fill_color(220, 220, 220)
-            pdf.cell(col_width * 0.35, row_height, "Lane", border=1, align='C', fill=True)
-            pdf.cell(col_width * 0.65, row_height, "Juge", border=1, align='C', fill=True)
-            
-            # Contenu
-            pdf.set_font("Arial", '', 7)
-            pdf.set_fill_color(255, 255, 255)
-            
-            row_num = 0
-            for lane_num, juge_name in sorted(lanes.items()):
-                y_pos = y_start + row_height * 2 + row_num * row_height
-                pdf.set_xy(x, y_pos)
-                pdf.cell(col_width * 0.35, row_height, clean_text(str(lane_num)), border=1, align='C')
-                juge_display = clean_text(juge_name)
-                if len(juge_display) > 18:
-                    juge_display = juge_display[:16] + ".."
-                pdf.cell(col_width * 0.65, row_height, juge_display, border=1, align='C')
-                row_num += 1
+        x = 20
+        y_start = 30
+        table_width = 170
+
+        # ========================
+        # En-tête heat
+        # ========================
+        pdf.set_font("Arial", 'B', 10)
+        pdf.set_xy(x, y_start)
+
+        header_text = clean_text(
+            f"{wod} | Heat {heat_num} | {start}-{end}"
+        )
+
+        pdf.cell(
+            table_width,
+            row_height + 2,
+            header_text,
+            border=1,
+            align='C',
+            fill=True
+        )
+
+        # ========================
+        # Sous-en-tête
+        # ========================
+        pdf.set_font("Arial", 'B', 9)
+
+        pdf.set_xy(x, y_start + row_height + 2)
+
+        pdf.cell(
+            40,
+            row_height,
+            "Lane",
+            border=1,
+            align='C',
+            fill=True
+        )
+
+        pdf.cell(
+            130,
+            row_height,
+            "Juge",
+            border=1,
+            align='C',
+            fill=True
+        )
+
+        # ========================
+        # Lignes
+        # ========================
+        pdf.set_font("Arial", '', 9)
+
+        row_num = 0
+
+        for lane_num, juge_name in sorted(lanes.items()):
+
+            y = y_start + (row_height * 2) + 2 + (row_num * row_height)
+
+            pdf.set_xy(x, y)
+
+            pdf.cell(
+                40,
+                row_height,
+                clean_text(str(lane_num)),
+                border=1,
+                align='C'
+            )
+
+            pdf.cell(
+                130,
+                row_height,
+                clean_text(str(juge_name)),
+                border=1,
+                align='C'
+            )
+
+            row_num += 1
 
     return pdf
 
