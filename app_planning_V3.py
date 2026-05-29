@@ -302,51 +302,61 @@ def extract_heat_number(heat_str):
 
 
 # ========================
-# ATTRIBUTION ÉQUILIBRÉE
-# ========================
-def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
-    planning = {j: [] for j in judges}
-    df = schedule.copy()
-    df['heat_num'] = df['Heat #'].apply(extract_heat_number)
-    df = df.sort_values(['Heat Start Time', 'Workout', 'heat_num', 'Lane']).reset_index(drop=True)
-
-    heats = []
-    for (wod, heat_num, start, end), g in df.groupby(['Workout', 'heat_num', 'Heat Start Time', 'Heat End Time']):
-        heats.append({'wod': wod, 'heat_num': heat_num, 'start': start, 'end': end, 'rows': g.to_dict('records')})
-
-    n_judges = len(judges)
-    target = len(df) // n_judges if n_judges > 0 else 0
-
-    ON = rotation_config['on']
-    REST = rotation_config['off']
-    
-    state = {j: {'last': -999, 'on': 0, 'rest': 0, 'count': 0} for j in judges}
-
-    for idx, heat in enumerate(heats):
-        wod = heat['wod']
-        dispo = disponibilites.get(wod, judges)
-        used = set()
-
         for row in heat['rows']:
-            best, best_score = None, 9999
-            for j in dispo:
-                if j in used:
-                    continue
-                s = state[j]
-                if any(c['wod'] == wod and c['heat_num'] == heat['heat_num'] for c in planning[j]):
-                    continue
-                score = 0
-                if s['last'] == idx - 1 and s['on'] > 0:
-                    score -= 100
-                if s['rest'] > 0:
-                    score += 50
-                score += max(0, s['count'] - target)
-                score += (s['count'] - target) * 2
-                if score < best_score:
-                    best_score, best = score, j
-            if best is None:
-                best = min(judges, key=lambda j: state[j]['count'])
 
+            candidates = []
+
+            for j in dispo:
+
+                if j in used_this_heat:
+                    continue
+
+                s = state[j]
+
+                # Eviter qu'un juge fasse 2 lanes du même heat
+                already_on_heat = any(
+                    c['wod'] == wod and c['heat_num'] == heat['heat_num']
+                    for c in planning[j]
+                )
+
+                if already_on_heat:
+                    continue
+
+                candidates.append(j)
+
+            # Fallback sécurité
+            if not candidates:
+                candidates = [
+                    j for j in judges
+                    if j not in used_this_heat
+                ]
+
+            # ========================
+            # PRIORITÉ AU RESPECT DU BLOC ON
+            # ========================
+            def judge_priority(j):
+
+                s = state[j]
+
+                # PRIORITÉ FORTE :
+                # continuer le bloc ON commencé
+                if 0 < s['worked_streak'] < ON:
+                    return (
+                        0,
+                        s['count']
+                    )
+
+                # PRIORITÉ NORMALE
+                return (
+                    1,
+                    s['count']
+                )
+
+            best = min(candidates, key=judge_priority)
+
+            # ========================
+            # Ajout planning
+            # ========================
             planning[best].append({
                 'wod': clean_text(str(wod)),
                 'lane': clean_text(str(row['Lane'])),
@@ -357,35 +367,38 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 'heat': clean_text(str(row['Heat #'])),
                 'heat_num': heat['heat_num']
             })
-            used.add(best)
 
+            used_this_heat.add(best)
+
+            # ========================
+            # Mise à jour état
+            # ========================
             s = state[best]
-            if s['last'] == idx - 1 and s['on'] > 0:
-                s['on'] -= 1
-                if s['on'] == 0:
-                    s['rest'] = REST
+
+            # Heat consécutif
+            if s['last_heat'] == idx - 1:
+                s['worked_streak'] += 1
             else:
-                s['on'] = ON - 1
-                s['rest'] = 0
-            s['last'] = idx
+                s['worked_streak'] = 1
+
+            # Déclenchement OFF
+            if s['worked_streak'] >= ON:
+                s['rest_remaining'] = OFF
+                s['worked_streak'] = 0
+
+            s['last_heat'] = idx
             s['count'] += 1
 
+        # ========================
+        # Décrément repos
+        # ========================
         for j in judges:
-            if state[j]['rest'] > 0 and state[j]['last'] != idx:
-                state[j]['rest'] -= 1
 
-    avg = sum(state[j]['count'] for j in judges) / len(judges)
-    over = [j for j in judges if state[j]['count'] > avg + 1]
-    under = [j for j in judges if state[j]['count'] < avg - 1]
-    for j_over in over:
-        for j_under in under:
-            if state[j_over]['count'] <= avg + 1 or state[j_under]['count'] >= avg - 1:
+            if state[j]['last_heat'] == idx:
                 continue
-            if planning[j_over]:
-                c = planning[j_over].pop()
-                planning[j_under].append(c)
-                state[j_over]['count'] -= 1
-                state[j_under]['count'] += 1
+
+            if state[j]['rest_remaining'] > 0:
+                state[j]['rest_remaining'] -= 1
 
     return planning
 
