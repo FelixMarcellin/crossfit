@@ -228,7 +228,14 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
 
     pdf = FooterLogoPDF(logo_path=logo_path, orientation='P')
 
-    heats = sorted(heat_map.items(), key=lambda x: (x[0][0], int(x[0][1]) if str(x[0][1]).isdigit() else 0))
+    heats = sorted(
+    heat_map.items(),
+    key=lambda x: (
+        x[0][0],
+        pd.to_datetime(str(x[0][2])),
+        int(x[0][1]) if str(x[0][1]).isdigit() else 0
+    )
+)
 
     col_width = 85
     row_height = 6
