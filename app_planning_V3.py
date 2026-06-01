@@ -311,6 +311,8 @@ def extract_heat_number(heat_str):
 # ========================
 # ATTRIBUTION ÉQUILIBRÉE
 # ========================
+from collections import deque
+
 def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
     planning = {j: [] for j in judges}
@@ -330,107 +332,57 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
         heats.append({
             "wod": wod,
             "heat_num": heat_num,
-            "start": start,
-            "end": end,
             "rows": sorted(g.to_dict("records"), key=lambda r: int(r["Lane"]))
         })
 
     ON = rotation_config["on"]
-    OFF = rotation_config["off"]
 
-    # =========================
-    # État juge
-    # =========================
+    judge_usage = {j: 0 for j in judges}
 
-    state = {
-        j: {
-            "heat_since_rest": 0,
-            "rest": 0,
-            "count": 0,
+    judge_queue = deque(sorted(judges, key=lambda j: 0))
 
-            # 🔥 clé du fix
-            "block_lane": None,
-            "block_id": -1
-        }
-        for j in judges
-    }
-
-    cycle_index = 0  # heat global
+    current_block = {}
+    block_counter = 0
 
     for heat in heats:
 
-        wod = heat["wod"]
-        dispo = disponibilites.get(wod, judges)
-
         lanes = heat["rows"]
-
-        used = set()
+        nb_lanes = len(lanes)
 
         # =========================
-        # assignation lane par lane
+        # NOUVEAU BLOC ON
+        # =========================
+
+        if block_counter == 0:
+
+            current_block = {}
+
+            available = list(judge_queue)
+
+            selected = available[:nb_lanes]
+
+            # retire de la queue
+            for j in selected:
+                judge_queue.remove(j)
+
+            # assignation FIXE lane -> judge
+            for lane_row, judge in zip(lanes, selected):
+
+                lane = str(lane_row["Lane"])
+
+                current_block[lane] = judge
+
+        # =========================
+        # APPLICATION DU BLOC
         # =========================
 
         for row in lanes:
 
             lane = str(row["Lane"])
+            judge = current_block[lane]
 
-            candidates = []
-
-            for j in dispo:
-
-                if j in used:
-                    continue
-
-                s = state[j]
-
-                if s["rest"] > 0:
-                    continue
-
-                candidates.append(j)
-
-            if not candidates:
-                candidates = [j for j in judges if j not in used]
-
-            def score(j):
-
-                s = state[j]
-
-                score = 0
-
-                # respect ON
-                if 0 < s["heat_since_rest"] < ON:
-                    score -= 1000
-
-                # respect OFF
-                if s["rest"] > 0:
-                    score += 10000
-
-                # 🔥 STABILITÉ ABSOLUE DU BLOC
-                if s["block_id"] == cycle_index and s["block_lane"] is not None:
-                    if s["block_lane"] == lane:
-                        score -= 500
-                    else:
-                        score += 500
-
-                # équilibrage
-                score += s["count"] * 10
-
-                return score
-
-            best = min(candidates, key=score)
-
-            s = state[best]
-
-            # =========================
-            # début de bloc ON
-            # =========================
-
-            if s["heat_since_rest"] == 0:
-                s["block_lane"] = lane
-                s["block_id"] = cycle_index
-
-            planning[best].append({
-                "wod": clean_text(str(heat["wod"])),
+            planning[judge].append({
+                "wod": clean_text(str(row["Workout"])),
                 "lane": clean_text(str(row["Lane"])),
                 "athlete": clean_text(str(row["Competitor"])),
                 "division": clean_text(str(row["Division"])),
@@ -440,33 +392,21 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 "heat_num": heat["heat_num"]
             })
 
-            used.add(best)
+            judge_usage[judge] += 1
 
-            # update état
-            if s["rest"] > 0:
-                s["rest"] -= 1
-
-            s["heat_since_rest"] += 1
-            s["count"] += 1
+        block_counter += 1
 
         # =========================
-        # fin heat -> gestion ON/OFF
+        # FIN DE BLOC
         # =========================
 
-        for j in judges:
+        if block_counter >= ON:
 
-            s = state[j]
+            block_counter = 0
 
-            if s["heat_since_rest"] >= ON:
-
-                s["heat_since_rest"] = 0
-                s["rest"] = OFF
-
-                # 🔥 RESET BLOC
-                s["block_lane"] = None
-                s["block_id"] = -1
-
-        cycle_index += 1  # 🔥 avance du bloc global
+            # les juges repartent en file
+            for j in current_block.values():
+                judge_queue.append(j)
 
     return planning
 
