@@ -313,14 +313,21 @@ def extract_heat_number(heat_str):
 # ========================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
+    from collections import deque
+
     planning = {j: [] for j in judges}
 
     df = schedule.copy()
     df["heat_num"] = df["Heat #"].apply(extract_heat_number)
 
-    df = df.sort_values(
-        ["Heat Start Time", "heat_num", "Lane"]
-    ).reset_index(drop=True)
+    # =========================
+    # NORMALISATION CRITIQUE
+    # =========================
+
+    df["Workout"] = df["Workout"].astype(str).str.strip().str.lower()
+    df["Lane"] = df["Lane"].apply(lambda x: str(int(float(x))) if pd.notna(x) else "")
+    df["Competitor"] = df["Competitor"].astype(str)
+    df["Division"] = df["Division"].astype(str)
 
     heats = []
 
@@ -337,49 +344,101 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
     ON = rotation_config["on"]
 
-    judge_load = {j: 0 for j in judges}
+    # =========================
+    # ÉTAT GLOBAL
+    # =========================
 
-    current_block_index = 0
+    judge_load = {j: 0 for j in judges}
+    judge_cycle = {j: 0 for j in judges}
+
+    lane_memory = {}  # lane -> judge stable
+
+    # file circulaire stable
+    judge_queue = deque(judges)
 
     for i, heat in enumerate(heats):
 
-        lanes = heat["rows"]
         wod = heat["wod"]
-        dispo = disponibilites.get(wod, judges)
+        lanes = heat["rows"]
 
-        # ======================================
-        # NOUVEAU BLOC
-        # ======================================
+        # =========================
+        # DISPO SAFE
+        # =========================
+
+        dispo = disponibilites.get(wod)
+        if not dispo:
+            dispo = judges
+
+        dispo = [d for d in dispo if d in judges]
+
+        if len(dispo) == 0:
+            dispo = judges
+
+        # =========================
+        # NOUVEAU BLOC ON
+        # =========================
 
         if i % ON == 0:
 
-            current_block_index += 1
+            current_assignment = {}
 
-            # tri global des juges (toujours stable)
-            available = [
-                j for j in judges
-                if j in dispo
-            ]
+            available = [j for j in judge_queue if j in dispo]
 
+            if len(available) == 0:
+                available = list(judges)
+
+            # tri stabilité + équité
             available.sort(key=lambda j: (judge_load[j], j))
 
-            # assignation fixe lane -> judge
-            lane_to_judge = {}
+            # assignation 1-to-1 lanes
+            for row, judge in zip(lanes, available):
+                lane = str(row["Lane"])
+                current_assignment[lane] = judge
 
-            for lane_row, judge in zip(lanes, available):
-                lane_to_judge[str(lane_row["Lane"])] = judge
+            # compléter si manque de juges
+            remaining_judges = [j for j in judges if j not in current_assignment.values()]
 
-        # ======================================
-        # APPLICATION DU BLOC
-        # ======================================
+            idx = 0
+            for row in lanes:
+                lane = str(row["Lane"])
+                if lane not in current_assignment:
+                    current_assignment[lane] = remaining_judges[idx % len(remaining_judges)]
+                    idx += 1
+
+            lane_memory = current_assignment.copy()
+
+        else:
+
+            # =========================
+            # CONTINUITÉ DU BLOC
+            # =========================
+
+            current_assignment = lane_memory.copy()
+
+            # sécurisation lanes nouvelles
+            for row in lanes:
+                lane = str(row["Lane"])
+
+                if lane not in current_assignment:
+                    # assignation fallback stable
+                    available = [j for j in judges if j not in current_assignment.values()]
+
+                    if not available:
+                        available = list(judges)
+
+                    current_assignment[lane] = available[0]
+
+        # =========================
+        # APPLICATION
+        # =========================
 
         for row in lanes:
 
             lane = str(row["Lane"])
-            judge = lane_to_judge.get(lane)
+            judge = current_assignment.get(lane)
 
             if judge is None:
-                continue
+                continue  # sécurité ultime
 
             planning[judge].append({
                 "wod": clean_text(str(row["Workout"])),
@@ -394,8 +453,17 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
             judge_load[judge] += 1
 
-    return planning
+        # =========================
+        # ROTATION QUEUE
+        # =========================
 
+        if i % ON == ON - 1:
+            for j in current_assignment.values():
+                if j in judge_queue:
+                    judge_queue.remove(j)
+                judge_queue.append(j)
+
+    return planning
 
 # ========================
 # MAIN STREAMLIT
