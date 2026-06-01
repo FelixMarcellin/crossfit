@@ -311,8 +311,6 @@ def extract_heat_number(heat_str):
 # ========================
 # ATTRIBUTION ÉQUILIBRÉE
 # ========================
-from collections import deque
-
 def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
     planning = {j: [] for j in judges}
@@ -338,111 +336,50 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
         })
 
     ON = rotation_config["on"]
-    OFF = rotation_config["off"]
 
-    # =========================
-    # État global
-    # =========================
+    judge_load = {j: 0 for j in judges}
 
-    state = {
-        j: {
-            "heat_since_rest": 0,
-            "rest": 0,
-            "count": 0,
-            "block_lane": None
-        }
-        for j in judges
-    }
+    current_block_index = 0
 
-    previous_assignment = {}  # lane -> judge
+    for i, heat in enumerate(heats):
 
-    for heat in heats:
-
+        lanes = heat["rows"]
         wod = heat["wod"]
         dispo = disponibilites.get(wod, judges)
 
-        lanes = heat["rows"]
+        # ======================================
+        # NOUVEAU BLOC
+        # ======================================
 
-        current_assignment = {}
-        used_judges = set()
+        if i % ON == 0:
 
-        current_lanes = set(str(r["Lane"]) for r in lanes)
+            current_block_index += 1
 
-        # ==================================================
-        # 1. RECONDUCTION des assignations si lane existe
-        # ==================================================
-
-        for row in lanes:
-
-            lane = str(row["Lane"])
-
-            if lane in previous_assignment:
-
-                judge = previous_assignment[lane]
-
-                if (
-                    judge in dispo
-                    and state[judge]["rest"] == 0
-                    and judge not in used_judges
-                ):
-                    current_assignment[lane] = judge
-                    used_judges.add(judge)
-
-        # ==================================================
-        # 2. ASSIGNATION des lanes manquantes
-        # ==================================================
-
-        missing_lanes = [
-            lane for lane in current_lanes
-            if lane not in current_assignment
-        ]
-
-        for lane in sorted(missing_lanes, key=int):
-
-            candidates = [
-                j for j in dispo
-                if j not in used_judges
-                and state[j]["rest"] == 0
+            # tri global des juges (toujours stable)
+            available = [
+                j for j in judges
+                if j in dispo
             ]
 
-            if not candidates:
-                candidates = [
-                    j for j in judges
-                    if j not in used_judges
-                ]
+            available.sort(key=lambda j: (judge_load[j], j))
 
-            def score(j):
+            # assignation fixe lane -> judge
+            lane_to_judge = {}
 
-                s = state[j]
+            for lane_row, judge in zip(lanes, available):
+                lane_to_judge[str(lane_row["Lane"])] = judge
 
-                score = 0
-
-                # équilibre global
-                score += s["count"] * 10
-
-                # continuité bloc ON
-                if s["heat_since_rest"] > 0 and s["heat_since_rest"] < ON:
-                    score -= 200
-
-                # garder lane si déjà assigné
-                if s["block_lane"] == lane:
-                    score -= 50
-
-                return score
-
-            best = min(candidates, key=score)
-
-            current_assignment[lane] = best
-            used_judges.add(best)
-
-        # ==================================================
-        # 3. APPLICATION planning
-        # ==================================================
+        # ======================================
+        # APPLICATION DU BLOC
+        # ======================================
 
         for row in lanes:
 
             lane = str(row["Lane"])
-            judge = current_assignment[lane]
+            judge = lane_to_judge.get(lane)
+
+            if judge is None:
+                continue
 
             planning[judge].append({
                 "wod": clean_text(str(row["Workout"])),
@@ -455,46 +392,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 "heat_num": heat["heat_num"]
             })
 
-        # ==================================================
-        # 4. UPDATE STATE
-        # ==================================================
-
-        worked = set(current_assignment.values())
-
-        for j in judges:
-
-            s = state[j]
-
-            if j in worked:
-
-                if s["heat_since_rest"] == 0:
-                    s["block_lane"] = next(
-                        (lane for lane, jj in current_assignment.items() if jj == j),
-                        None
-                    )
-
-                s["heat_since_rest"] += 1
-                s["count"] += 1
-
-            else:
-
-                if s["rest"] > 0:
-                    s["rest"] -= 1
-
-        # ==================================================
-        # 5. FIN DE BLOC
-        # ==================================================
-
-        for j in judges:
-
-            s = state[j]
-
-            if s["heat_since_rest"] >= ON:
-                s["heat_since_rest"] = 0
-                s["rest"] = OFF
-                s["block_lane"] = None
-
-        previous_assignment = current_assignment.copy()
+            judge_load[judge] += 1
 
     return planning
 
