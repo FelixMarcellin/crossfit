@@ -339,7 +339,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     OFF = rotation_config["off"]
 
     # =========================
-    # État global des juges
+    # État juge
     # =========================
 
     state = {
@@ -347,12 +347,17 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             "heat_since_rest": 0,
             "rest": 0,
             "count": 0,
-            "block_lane": None
+
+            # 🔥 clé du fix
+            "block_lane": None,
+            "block_id": -1
         }
         for j in judges
     }
 
-    for heat_idx, heat in enumerate(heats):
+    cycle_index = 0  # heat global
+
+    for heat in heats:
 
         wod = heat["wod"]
         dispo = disponibilites.get(wod, judges)
@@ -378,7 +383,6 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
                 s = state[j]
 
-                # en repos
                 if s["rest"] > 0:
                     continue
 
@@ -393,21 +397,22 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
                 score = 0
 
-                # priorité respect ON
-                if s["heat_since_rest"] > 0 and s["heat_since_rest"] < ON:
+                # respect ON
+                if 0 < s["heat_since_rest"] < ON:
                     score -= 1000
 
                 # respect OFF
                 if s["rest"] > 0:
                     score += 10000
 
-                # stabilité lane pendant bloc ON
-                if s["block_lane"] is not None and s["block_lane"] != lane:
-                    score += 50
-                elif s["block_lane"] == lane:
-                    score -= 50
+                # 🔥 STABILITÉ ABSOLUE DU BLOC
+                if s["block_id"] == cycle_index and s["block_lane"] is not None:
+                    if s["block_lane"] == lane:
+                        score -= 500
+                    else:
+                        score += 500
 
-                # équilibrage global
+                # équilibrage
                 score += s["count"] * 10
 
                 return score
@@ -417,11 +422,12 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             s = state[best]
 
             # =========================
-            # début bloc ON si besoin
+            # début de bloc ON
             # =========================
 
             if s["heat_since_rest"] == 0:
                 s["block_lane"] = lane
+                s["block_id"] = cycle_index
 
             planning[best].append({
                 "wod": clean_text(str(heat["wod"])),
@@ -436,10 +442,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
             used.add(best)
 
-            # =========================
             # update état
-            # =========================
-
             if s["rest"] > 0:
                 s["rest"] -= 1
 
@@ -447,7 +450,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             s["count"] += 1
 
         # =========================
-        # fin de heat : gestion ON/OFF
+        # fin heat -> gestion ON/OFF
         # =========================
 
         for j in judges:
@@ -455,9 +458,15 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             s = state[j]
 
             if s["heat_since_rest"] >= ON:
+
                 s["heat_since_rest"] = 0
                 s["rest"] = OFF
+
+                # 🔥 RESET BLOC
                 s["block_lane"] = None
+                s["block_id"] = -1
+
+        cycle_index += 1  # 🔥 avance du bloc global
 
     return planning
 
