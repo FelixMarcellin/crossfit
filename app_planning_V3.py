@@ -327,136 +327,104 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     for (wod, heat_num, start, end), g in df.groupby(
         ["Workout", "heat_num", "Heat Start Time", "Heat End Time"]
     ):
-
         heats.append({
             "wod": wod,
             "heat_num": heat_num,
             "start": start,
             "end": end,
-            "rows": sorted(
-                g.to_dict("records"),
-                key=lambda r: int(r["Lane"])
-            )
+            "rows": sorted(g.to_dict("records"), key=lambda r: int(r["Lane"]))
         })
 
     ON = rotation_config["on"]
+    OFF = rotation_config["off"]
 
-    judge_heat_count = {
-        j: 0
+    # =========================
+    # État global des juges
+    # =========================
+
+    state = {
+        j: {
+            "heat_since_rest": 0,
+            "rest": 0,
+            "count": 0,
+            "block_lane": None
+        }
         for j in judges
     }
 
-    current_block = {}
-    block_remaining = 0
-
-    for heat in heats:
+    for heat_idx, heat in enumerate(heats):
 
         wod = heat["wod"]
-
         dispo = disponibilites.get(wod, judges)
 
-        lanes = sorted(
-            heat["rows"],
-            key=lambda r: int(r["Lane"])
-        )
+        lanes = heat["rows"]
 
-        nb_lanes = len(lanes)
+        used = set()
 
-        # =====================================
-        # Nouveau bloc ON
-        # =====================================
-
-        if block_remaining == 0:
-
-            current_block = {}
-
-            available_judges = [
-                j for j in judges
-                if j in dispo
-            ]
-
-            available_judges.sort(
-                key=lambda j: (
-                    judge_heat_count[j],
-                    j
-                )
-            )
-
-            selected_judges = available_judges[:nb_lanes]
-
-            for row, judge in zip(lanes, selected_judges):
-
-                lane = str(row["Lane"])
-
-                current_block[lane] = {
-                    "judge": judge,
-                    "lane": lane
-                }
-
-            block_remaining = ON
-
-        # =====================================
-        # Gestion variation du nombre de lanes
-        # =====================================
-
-        current_lanes = set(current_block.keys())
-        heat_lanes = {str(r["Lane"]) for r in lanes}
-
-        # Nouvelles lanes apparues
-
-        missing_lanes = heat_lanes - current_lanes
-
-        if missing_lanes:
-
-            already_used = {
-                v["judge"]
-                for v in current_block.values()
-            }
-
-            candidates = [
-                j for j in dispo
-                if j not in already_used
-            ]
-
-            candidates.sort(
-                key=lambda j: (
-                    judge_heat_count[j],
-                    j
-                )
-            )
-
-            for lane, judge in zip(
-                sorted(missing_lanes, key=int),
-                candidates
-            ):
-
-                current_block[lane] = {
-                    "judge": judge,
-                    "lane": lane
-                }
-
-        # Lanes supprimées
-
-        removed_lanes = current_lanes - heat_lanes
-
-        for lane in removed_lanes:
-            del current_block[lane]
-
-        # =====================================
-        # Affectation du heat
-        # =====================================
+        # =========================
+        # assignation lane par lane
+        # =========================
 
         for row in lanes:
 
             lane = str(row["Lane"])
 
-            if lane not in current_block:
-                continue
+            candidates = []
 
-            judge = current_block[lane]["judge"]
+            for j in dispo:
 
-            planning[judge].append({
-                "wod": clean_text(str(row["Workout"])),
+                if j in used:
+                    continue
+
+                s = state[j]
+
+                # en repos
+                if s["rest"] > 0:
+                    continue
+
+                candidates.append(j)
+
+            if not candidates:
+                candidates = [j for j in judges if j not in used]
+
+            def score(j):
+
+                s = state[j]
+
+                score = 0
+
+                # priorité respect ON
+                if s["heat_since_rest"] > 0 and s["heat_since_rest"] < ON:
+                    score -= 1000
+
+                # respect OFF
+                if s["rest"] > 0:
+                    score += 10000
+
+                # stabilité lane pendant bloc ON
+                if s["block_lane"] is not None and s["block_lane"] != lane:
+                    score += 50
+                elif s["block_lane"] == lane:
+                    score -= 50
+
+                # équilibrage global
+                score += s["count"] * 10
+
+                return score
+
+            best = min(candidates, key=score)
+
+            s = state[best]
+
+            # =========================
+            # début bloc ON si besoin
+            # =========================
+
+            if s["heat_since_rest"] == 0:
+                s["block_lane"] = lane
+
+            planning[best].append({
+                "wod": clean_text(str(heat["wod"])),
                 "lane": clean_text(str(row["Lane"])),
                 "athlete": clean_text(str(row["Competitor"])),
                 "division": clean_text(str(row["Division"])),
@@ -466,22 +434,30 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 "heat_num": heat["heat_num"]
             })
 
-        block_remaining -= 1
+            used.add(best)
 
-        # =====================================
-        # Fin du bloc ON
-        # =====================================
+            # =========================
+            # update état
+            # =========================
 
-        if block_remaining == 0:
+            if s["rest"] > 0:
+                s["rest"] -= 1
 
-            worked_judges = {
-                v["judge"]
-                for v in current_block.values()
-            }
+            s["heat_since_rest"] += 1
+            s["count"] += 1
 
-            for judge in worked_judges:
+        # =========================
+        # fin de heat : gestion ON/OFF
+        # =========================
 
-                judge_heat_count[judge] += ON
+        for j in judges:
+
+            s = state[j]
+
+            if s["heat_since_rest"] >= ON:
+                s["heat_since_rest"] = 0
+                s["rest"] = OFF
+                s["block_lane"] = None
 
     return planning
 
