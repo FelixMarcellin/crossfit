@@ -312,162 +312,176 @@ def extract_heat_number(heat_str):
 # ATTRIBUTION ÉQUILIBRÉE
 # ========================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
+
     planning = {j: [] for j in judges}
 
     df = schedule.copy()
-    df['heat_num'] = df['Heat #'].apply(extract_heat_number)
+    df["heat_num"] = df["Heat #"].apply(extract_heat_number)
 
     df = df.sort_values(
-        ['Heat Start Time', 'Workout', 'heat_num', 'Lane']
+        ["Heat Start Time", "heat_num", "Lane"]
     ).reset_index(drop=True)
 
-    # ========================
-    # Construction des heats
-    # ========================
     heats = []
 
     for (wod, heat_num, start, end), g in df.groupby(
-        ['Workout', 'heat_num', 'Heat Start Time', 'Heat End Time']
+        ["Workout", "heat_num", "Heat Start Time", "Heat End Time"]
     ):
 
         heats.append({
-            'wod': wod,
-            'heat_num': heat_num,
-            'start': start,
-            'end': end,
-            'rows': g.to_dict('records')
+            "wod": wod,
+            "heat_num": heat_num,
+            "start": start,
+            "end": end,
+            "rows": sorted(
+                g.to_dict("records"),
+                key=lambda r: int(r["Lane"])
+            )
         })
 
-    ON = rotation_config['on']
-    OFF = rotation_config['off']
+    ON = rotation_config["on"]
 
-    # ========================
-    # Etat des juges
-    # ========================
-    state = {
-        j: {
-            'worked_streak': 0,
-            'rest_remaining': 0,
-            'count': 0,
-            'last_heat': -999
-        }
+    judge_heat_count = {
+        j: 0
         for j in judges
     }
 
-    # ========================
-    # Attribution des heats
-    # ========================
-    for idx, heat in enumerate(heats):
+    current_block = {}
+    block_remaining = 0
 
-        wod = heat['wod']
+    for heat in heats:
+
+        wod = heat["wod"]
+
         dispo = disponibilites.get(wod, judges)
 
-        used_this_heat = set()
+        lanes = sorted(
+            heat["rows"],
+            key=lambda r: int(r["Lane"])
+        )
 
-        # ========================
-        # Attribution des lanes
-        # ========================
-        for row in heat['rows']:
+        nb_lanes = len(lanes)
 
-            candidates = []
+        # =====================================
+        # Nouveau bloc ON
+        # =====================================
 
-            for j in dispo:
+        if block_remaining == 0:
 
-                if j in used_this_heat:
-                    continue
+            current_block = {}
 
-                # Eviter qu'un juge fasse 2 lanes du même heat
-                already_on_heat = any(
-                    c['wod'] == wod and c['heat_num'] == heat['heat_num']
-                    for c in planning[j]
+            available_judges = [
+                j for j in judges
+                if j in dispo
+            ]
+
+            available_judges.sort(
+                key=lambda j: (
+                    judge_heat_count[j],
+                    j
                 )
+            )
 
-                if already_on_heat:
-                    continue
+            selected_judges = available_judges[:nb_lanes]
 
-                candidates.append(j)
+            for row, judge in zip(lanes, selected_judges):
 
-            # Fallback sécurité
-            if not candidates:
-                candidates = [
-                    j for j in judges
-                    if j not in used_this_heat
-                ]
+                lane = str(row["Lane"])
 
-            # ========================
-            # PRIORITÉ AU RESPECT DU BLOC ON
-            # ========================
-            def judge_priority(j):
+                current_block[lane] = {
+                    "judge": judge,
+                    "lane": lane
+                }
 
-                s = state[j]
+            block_remaining = ON
 
-                # Continuer un bloc ON déjà commencé
-                if 0 < s['worked_streak'] < ON:
-                    return (
-                        0,
-                        s['count']
-                    )
+        # =====================================
+        # Gestion variation du nombre de lanes
+        # =====================================
 
-                # Léger malus si en OFF
-                if s['rest_remaining'] > 0:
-                    return (
-                        2,
-                        s['count']
-                    )
+        current_lanes = set(current_block.keys())
+        heat_lanes = {str(r["Lane"]) for r in lanes}
 
-                # Cas normal
-                return (
-                    1,
-                    s['count']
+        # Nouvelles lanes apparues
+
+        missing_lanes = heat_lanes - current_lanes
+
+        if missing_lanes:
+
+            already_used = {
+                v["judge"]
+                for v in current_block.values()
+            }
+
+            candidates = [
+                j for j in dispo
+                if j not in already_used
+            ]
+
+            candidates.sort(
+                key=lambda j: (
+                    judge_heat_count[j],
+                    j
                 )
+            )
 
-            best = min(candidates, key=judge_priority)
+            for lane, judge in zip(
+                sorted(missing_lanes, key=int),
+                candidates
+            ):
 
-            # ========================
-            # Ajout planning
-            # ========================
-            planning[best].append({
-                'wod': clean_text(str(wod)),
-                'lane': clean_text(str(row['Lane'])),
-                'athlete': clean_text(str(row['Competitor'])),
-                'division': clean_text(str(row['Division'])),
-                'start': clean_text(str(row['Heat Start Time'])),
-                'end': clean_text(str(row['Heat End Time'])),
-                'heat': clean_text(str(row['Heat #'])),
-                'heat_num': heat['heat_num']
-            })
+                current_block[lane] = {
+                    "judge": judge,
+                    "lane": lane
+                }
 
-            used_this_heat.add(best)
+        # Lanes supprimées
 
-            # ========================
-            # Mise à jour état
-            # ========================
-            s = state[best]
+        removed_lanes = current_lanes - heat_lanes
 
-            # Heat consécutif
-            if s['last_heat'] == idx - 1:
-                s['worked_streak'] += 1
-            else:
-                s['worked_streak'] = 1
+        for lane in removed_lanes:
+            del current_block[lane]
 
-            # Déclenchement OFF
-            if s['worked_streak'] >= ON:
-                s['rest_remaining'] = OFF
-                s['worked_streak'] = 0
+        # =====================================
+        # Affectation du heat
+        # =====================================
 
-            s['last_heat'] = idx
-            s['count'] += 1
+        for row in lanes:
 
-        # ========================
-        # Décrément repos
-        # ========================
-        for j in judges:
+            lane = str(row["Lane"])
 
-            if state[j]['last_heat'] == idx:
+            if lane not in current_block:
                 continue
 
-            if state[j]['rest_remaining'] > 0:
-                state[j]['rest_remaining'] -= 1
+            judge = current_block[lane]["judge"]
+
+            planning[judge].append({
+                "wod": clean_text(str(row["Workout"])),
+                "lane": clean_text(str(row["Lane"])),
+                "athlete": clean_text(str(row["Competitor"])),
+                "division": clean_text(str(row["Division"])),
+                "start": clean_text(str(row["Heat Start Time"])),
+                "end": clean_text(str(row["Heat End Time"])),
+                "heat": clean_text(str(row["Heat #"])),
+                "heat_num": heat["heat_num"]
+            })
+
+        block_remaining -= 1
+
+        # =====================================
+        # Fin du bloc ON
+        # =====================================
+
+        if block_remaining == 0:
+
+            worked_judges = {
+                v["judge"]
+                for v in current_block.values()
+            }
+
+            for judge in worked_judges:
+
+                judge_heat_count[judge] += ON
 
     return planning
 
