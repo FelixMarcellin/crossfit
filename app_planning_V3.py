@@ -1,14 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Jun  2 14:06:56 2026
-
-@author: felima
-"""
-
-# -*- coding: utf-8 -*-
-"""
 Planning Juges équilibré - Crossfit Amiens
-Version 9.8 : Correction stricte de l'unicité des juges par Heat
+Version 9.9 : Correction bug de plantage Streamlit + Unicité stricte des juges
 """
 
 import streamlit as st
@@ -60,43 +53,47 @@ def clean_text(text):
 # LECTURE DU FICHIER EXCEL (feuille "Heats")
 # ========================
 def load_schedule_from_excel(uploaded_file):
-    xls = pd.ExcelFile(uploaded_file)
-    
-    sheet_name = None
-    for name in xls.sheet_names:
-        if name.lower() == "heats":
-            sheet_name = name
-            break
-    
-    if sheet_name is None:
-        st.error("❌ Feuille 'Heats' introuvable dans le fichier Excel.")
+    try:
+        xls = pd.ExcelFile(uploaded_file)
+        
+        sheet_name = None
+        for name in xls.sheet_names:
+            if name.lower() == "heats":
+                sheet_name = name
+                break
+        
+        if sheet_name is None:
+            st.error("❌ Feuille 'Heats' introuvable dans le fichier Excel.")
+            return None
+        
+        df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
+        
+        required_cols = ['Lane', 'Competitor', 'Division', 'Workout', 'Workout Location', 'Heat #', 'Heat Start Time', 'Heat End Time']
+        
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            st.error(f"❌ Colonnes manquantes dans la feuille 'Heats': {missing_cols}")
+            return None
+        
+        df = df.rename(columns={
+            'Workout Location': 'Workout Location',
+            'Heat #': 'Heat #',
+            'Heat Start Time': 'Heat Start Time',
+            'Heat End Time': 'Heat End Time'
+        })
+        
+        for col in ['Workout', 'Competitor', 'Division', 'Workout Location', 'Heat #']:
+            if col in df.columns:
+                df[col] = df[col].apply(lambda x: clean_text(str(x)) if pd.notna(x) else "")
+        
+        df = df[df['Competitor'].notna()]
+        df = df[df['Competitor'] != ""]
+        df = df[~df['Competitor'].str.contains('EMPTY LANE', na=False)]
+        
+        return df
+    except Exception as e:
+        st.error(f"Erreur lors du chargement du fichier Excel : {e}")
         return None
-    
-    df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
-    
-    required_cols = ['Lane', 'Competitor', 'Division', 'Workout', 'Workout Location', 'Heat #', 'Heat Start Time', 'Heat End Time']
-    
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        st.error(f"❌ Colonnes manquantes dans la feuille 'Heats': {missing_cols}")
-        return None
-    
-    df = df.rename(columns={
-        'Workout Location': 'Workout Location',
-        'Heat #': 'Heat #',
-        'Heat Start Time': 'Heat Start Time',
-        'Heat End Time': 'Heat End Time'
-    })
-    
-    for col in ['Workout', 'Competitor', 'Division', 'Workout Location', 'Heat #']:
-        if col in df.columns:
-            df[col] = df[col].apply(lambda x: clean_text(str(x)) if pd.notna(x) else "")
-    
-    df = df[df['Competitor'].notna()]
-    df = df[df['Competitor'] != ""]
-    df = df[~df['Competitor'].str.contains('EMPTY LANE', na=False)]
-    
-    return df
 
 
 # ========================
@@ -248,7 +245,7 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
             x = 10 if is_left else 10 + col_width + spacing_x
             
             if idx == 2:
-                max_lanes = max(len(heats[i][1]), len(heats[i+1][1]))
+                max_lanes = max(len(heats[i][1]), len(heats[i+1][1])) if i+1 < len(heats) else len(heats[i][1])
                 block_height = header_height + (max_lanes * row_height) + 4
                 current_y += block_height
             
@@ -299,7 +296,7 @@ def extract_heat_number(heat_str):
 # ========================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     planning = {j: [] for j in judges}
-    warnings_list = []  # Pour remonter les vrais manques à l'utilisateur
+    warnings_list = []
 
     df = schedule.copy()
     df["heat_num"] = df["Heat #"].apply(extract_heat_number)
@@ -339,7 +336,6 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
         lanes = sorted({str(int(float(r["Lane"]))) for r in heat["rows"]}, key=int)
 
-        # Forcer la réévaluation du bloc si vide ou si plus personne n'est ON
         new_block = False
         if not current_block:
             new_block = True
@@ -352,13 +348,11 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             current_block = {}
             candidates = []
 
-            # 1. Juges dispo et libres
             for j in judges:
                 if j in dispo and state[j]["phase"] != "OFF":
                     candidates.append(j)
             candidates = sorted(candidates, key=lambda j: (state[j]["count"], j))
 
-            # 2. Si pas assez, on pioche chez les OFF (en repos)
             if len(candidates) < len(lanes):
                 extra_off = [j for j in judges if j in dispo and state[j]["phase"] == "OFF"]
                 extra_off = sorted(extra_off, key=lambda j: (state[j]["count"], state[j]["remaining"]))
@@ -366,43 +360,36 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                     if j not in candidates:
                         candidates.append(j)
 
-            # 3. Si TOUJOURS pas assez, on prend n'importe qui (même déclaré indisponible sur le WOD)
             if len(candidates) < len(lanes):
                 absolute_extra = [j for j in judges if j not in candidates]
                 absolute_extra = sorted(absolute_extra, key=lambda j: state[j]["count"])
                 candidates.extend(absolute_extra)
 
-            # Remplissage initial du bloc
             for lane, judge in zip(lanes, candidates):
                 current_block[lane] = judge
                 state[judge]["phase"] = "ON"
                 state[judge]["remaining"] = ON
                 state[judge]["lane"] = lane
 
-        # --- AFFECTATION ET VÉRIFICATION STRICTE D'UNICITÉ ---
         worked_this_heat = set()
 
         for row in heat["rows"]:
             lane = str(int(float(row["Lane"])))
             judge = current_block.get(lane)
 
-            # SÉCURITÉ ULTRA-STRICTE : Si le juge prévu bosse déjà sur une autre ligne de ce heat, ou est absent
-            if judge is None or judge in worked_this_heat:
-                # On cherche un remplaçant d'urgence qui n'est absolument pas sur ce heat
+            # Vérification stricte : le juge ne doit pas déjà être sur une ligne de ce Heat
+            if judge is None or judge == "SANS JUGE" or judge in worked_this_heat:
                 backup_candidates = [j for j in judges if j not in worked_this_heat]
                 
                 if backup_candidates:
-                    # On prend le moins occupé
                     judge = min(backup_candidates, key=lambda j: state[j]["count"])
-                    # On met à jour le bloc pour stabiliser
                     current_block[lane] = judge
                     state[judge]["phase"] = "ON"
                     state[judge]["remaining"] = ON
                     state[judge]["lane"] = lane
                 else:
-                    # Cas mathématiquement impossible (ex: 6 couloirs actifs mais seulement 4 juges enregistrés au total)
                     judge = "SANS JUGE"
-                    warnings_list.append(f"⚠️ {wod} | {heat_label} | Couloir {lane} : Aucun juge disponible (Pas assez de juges au total !)")
+                    warnings_list.append(f"⚠️ {wod} | {heat_label} | Couloir {lane} : Aucun juge disponible (Effectif total insuffisant !)")
 
             if judge != "SANS JUGE":
                 planning[judge].append({
@@ -418,7 +405,6 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 worked_this_heat.add(judge)
                 state[judge]["count"] += 1
 
-        # Mise à jour des compteurs après le heat
         for judge in judges:
             s = state[judge]
             if judge in worked_this_heat:
@@ -435,10 +421,10 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                         s["phase"] = "AVAILABLE"
                         s["remaining"] = 0
 
-        # Nettoyage du bloc (les juges qui passent OFF libèrent le couloir)
         lanes_to_remove = []
         for lane, judge in current_block.items():
-            if judge not in state or state[judge]["phase"] != "ON":
+            # Correction de la sécurité contre le plantage
+            if judge == "SANS JUGE" or judge not in state or state[judge]["phase"] != "ON":
                 lanes_to_remove.append(lane)
         for lane in lanes_to_remove:
             del current_block[lane]
@@ -461,8 +447,12 @@ def main():
         st.header("🙅‍♂️ Juges")
         judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
         if judges_file:
-            judges_df = pd.read_csv(judges_file, header=None, encoding='latin1')
-            judges = [clean_text(str(j)) for j in judges_df[0].dropna().tolist()]
+            try:
+                judges_df = pd.read_csv(judges_file, header=None, encoding='latin1')
+                judges = [clean_text(str(j)) for j in judges_df[0].dropna().tolist()]
+            except Exception as e:
+                st.error(f"Erreur de lecture du CSV des juges: {e}")
+                judges = []
         else:
             judges_text = st.text_area("Saisir les juges (un par ligne)", "Juge 1\nJuge 2\nJuge 3")
             judges = [clean_text(j.strip()) for j in judges_text.split('\n') if j.strip()]
@@ -489,60 +479,61 @@ def main():
             logo_path = temp_logo.name
 
     if schedule_file and judges:
-        try:
-            schedule = load_schedule_from_excel(schedule_file)
-            if schedule is None or schedule.empty:
-                st.stop()
-            
-            wods = sorted(schedule['Workout'].dropna().unique())
-            
-            st.header("📅 Disponibilités des juges")
-            disponibilites = {}
-            cols = st.columns(3)
-            for i, wod in enumerate(wods):
-                with cols[i % 3]:
-                    with st.expander(f"{wod}"):
-                        select_all = st.checkbox(f"Tout sélectionner ({wod})", key=f"sel_{wod}")
-                        if select_all:
-                            disponibilites[wod] = judges
-                        else:
-                            disponibilites[wod] = st.multiselect("Juges disponibles", judges, key=f"multi_{wod}")
+        schedule = load_schedule_from_excel(schedule_file)
+        if schedule is None or schedule.empty:
+            st.stop()
+        
+        wods = sorted(schedule['Workout'].dropna().unique())
+        
+        st.header("📅 Disponibilités des juges")
+        disponibilites = {}
+        cols = st.columns(3)
+        for i, wod in enumerate(wods):
+            with cols[i % 3]:
+                with st.expander(f"{wod}"):
+                    select_all = st.checkbox(f"Tout sélectionner ({wod})", key=f"sel_{wod}")
+                    if select_all:
+                        disponibilites[wod] = judges
+                    else:
+                        disponibilites[wod] = st.multiselect("Juges disponibles", judges, key=f"multi_{wod}")
 
-            if st.button("🦄 Générer le planning"):
-                planning, warnings = assign_judges_equitable(schedule, judges, disponibilites, rotation_system)
+        if st.button("🦄 Générer le planning"):
+            planning, warnings = assign_judges_equitable(schedule, judges, disponibilites, rotation_system)
 
-                # Affichage des alertes critiques de manque de personnel
-                if warnings:
-                    st.warning("🚨 **Alertes effectifs insuffisants :**")
-                    for w in warnings:
-                        st.write(w)
-                    st.info("💡 Ajoutez des juges à votre liste ou cochez plus de juges disponibles pour ces WODs.")
+            if warnings:
+                st.warning("🚨 **Alertes effectifs insuffisants :**")
+                for w in warnings:
+                    st.write(w)
+                st.info("💡 Ajoutez des juges à votre liste ou cochez plus de juges disponibles pour ces WODs.")
 
-                st.subheader("📊 Équilibre des assignations")
-                counts = {j: len(planning[j]) for j in judges}
-                for j in sorted(counts, key=counts.get, reverse=True):
-                    st.write(f"✅ {j}: {counts[j]} créneaux")
+            st.subheader("📊 Équilibre des assignations")
+            counts = {j: len(planning[j]) for j in judges}
+            for j in sorted(counts, key=counts.get, reverse=True):
+                st.write(f"✅ {j}: {counts[j]} créneaux")
 
-                try:
-                    pdf_juges = generate_pdf_tableau(planning, competition_name, logo_path)
-                    pdf_heats = generate_heat_pdf(planning, competition_name, logo_path)
-                    
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t1:
-                        pdf_juges.output(t1.name)
-                        with open(t1.name, "rb") as f:
-                            st.download_button("📘 Télécharger planning par juge", f, "planning_juges.pdf")
-                        os.unlink(t1.name)
-                    
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t2:
-                        pdf_heats.output(t2.name)
-                        with open(t2.name, "rb") as f:
-                            st.download_button("📗 Télécharger planning par heat", f, "planning_heats.pdf")
-                        os.unlink(t2.name)
-                    
-                    st.success("✅ Planning généré sans doublons de heat !")
-                    
-                except Exception as e:
-                    st.error(f"❌ Erreur lors de la génération des PDF: {str(e)}")
+            try:
+                pdf_juges = generate_pdf_tableau(planning, competition_name, logo_path)
+                pdf_heats = generate_heat_pdf(planning, competition_name, logo_path)
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t1:
+                    pdf_juges.output(t1.name)
+                    with open(t1.name, "rb") as f:
+                        st.download_button("📘 Télécharger planning par juge", f, "planning_juges.pdf")
+                    os.unlink(t1.name)
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t2:
+                    pdf_heats.output(t2.name)
+                    with open(t2.name, "rb") as f:
+                        st.download_button("📗 Télécharger planning par heat", f, "planning_heats.pdf")
+                    os.unlink(t2.name)
+                
+                st.success("✅ Planning généré sans doublons de heat !")
+                
+            except Exception as e:
+                st.error(f"❌ Erreur lors de la génération des PDF: {str(e)}")
+    else:
+        st.info("👉 Veuillez importer un fichier Excel contenant une feuille 'Heats' et saisir la liste des juges.")
 
-        except Exception as e:
-            st.error(f"❌ Erreur: {str(e)}")
+
+if __name__ == "__main__":
+    main()
