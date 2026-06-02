@@ -222,23 +222,22 @@ def extract_heat_number(heat_str):
 # ========================================================
 # NOUVEL ALGORITHME : SUIVI ET ROULEMENT STRICT PAR LIGNE
 # ========================================================
-def assignjudgesequitableschedule(schedule, judges, disponibilites, rotationconfig):
+def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     planning = {j: [] for j in judges}
-    warningslist = []
+    warnings_list = []
 
-    ONTARGET = rotationconfig["on"]
-    OFFTARGET = rotationconfig["off"]
-    MAXALLOWED = ONTARGET + 1
+    on_target = rotation_config["on"]
+    off_target = rotation_config["off"]
 
     df = schedule.copy()
-    df["heatnum"] = df["Heat"].apply(extract_heat_number)
-    df = df.sort_values(["Heat Start Time", "heatnum", "Lane"]).reset_index(drop=True)
+    df["heat_num"] = df["Heat #"].apply(extract_heat_number)
+    df = df.sort_values(["Heat Start Time", "heat_num", "Lane"]).reset_index(drop=True)
 
     heats = []
-    for (wod, heatnum, start, end), g in df.groupby(["Workout", "heatnum", "Heat Start Time", "Heat End Time"]):
+    for (wod, heat_num, start, end), g in df.groupby(["Workout", "heat_num", "Heat Start Time", "Heat End Time"]):
         heats.append({
             "wod": wod,
-            "heatnum": heatnum,
+            "heat_num": heat_num,
             "start": start,
             "end": end,
             "rows": sorted(g.to_dict("records"), key=lambda r: int(float(r["Lane"])))
@@ -246,152 +245,143 @@ def assignjudgesequitableschedule(schedule, judges, disponibilites, rotationconf
 
     state = {
         j: {
-            "status": "AVAILABLE",          # AVAILABLE, ON, OFF
-            "heatssanspause": 0,            # heats travaillés consécutivement
-            "consecutiveoff": 0,            # heats de repos consécutifs
-            "totalcount": 0,                # équilibrage global
-            "currentlane": None,            # ligne gardée pendant le bloc
+            "status": "AVAILABLE",   # AVAILABLE, ON, OFF
+            "worked": 0,             # heats consécutifs travaillés dans le bloc
+            "rest": 0,               # heats consécutifs de repos
+            "total": 0,              # équilibre global
+            "current_lane": None     # ligne conservée pendant le bloc
         }
         for j in judges
     }
 
-    def is_available_for_work(j):
-        s = state[j]
-        return s["status"] in ("AVAILABLE", "ON") and s["heatssanspause"] < ONTARGET
-
-    def can_keep_lane(j, lane):
-        s = state[j]
-        return s["currentlane"] == lane and is_available_for_work(j)
-
     for heat in heats:
         wod = heat["wod"]
-        heatlabel = f"Heat {heat['heatnum']} ({heat['start']}-{heat['end']})"
+        heat_label = f"Heat {heat['heat_num']} ({heat['start']}-{heat['end']})"
         dispo = disponibilites.get(wod, judges)
         if not dispo:
             dispo = judges
 
-        judgesworkingthisheat = set()
-        laneassignments = {}
+        judges_working_this_heat = set()
+        lane_assignments = {}
 
-        # 1) Mise à jour des statuts avant affectation
+        # Mise à jour des statuts avant l'affectation
         for j in judges:
             s = state[j]
-
             if s["status"] == "OFF":
-                s["consecutiveoff"] += 1
-                if s["consecutiveoff"] >= OFFTARGET:
+                s["rest"] += 1
+                if s["rest"] >= off_target:
                     s["status"] = "AVAILABLE"
-                    s["consecutiveoff"] = 0
-                    s["heatssanspause"] = 0
-                    s["currentlane"] = None
+                    s["rest"] = 0
+                    s["worked"] = 0
+                    s["current_lane"] = None
 
-        # 2) Affectation ligne par ligne
         for row in heat["rows"]:
             lane = str(int(float(row["Lane"])))
-            chosenjudge = None
+            chosen_judge = None
 
-            # Priorité 1 : garder le juge déjà sur cette ligne si possible
-            prevjudge = None
-            for j in judges:
-                if state[j]["currentlane"] == lane and j in dispo:
-                    prevjudge = j
-                    break
+            # Priorité 1 : garder le même juge sur la même ligne
+            if lane in lane_assignments:
+                prev_judge = lane_assignments[lane]
+                if (
+                    prev_judge in dispo
+                    and prev_judge not in judges_working_this_heat
+                    and state[prev_judge]["status"] in ("AVAILABLE", "ON")
+                    and state[prev_judge]["worked"] < on_target
+                ):
+                    chosen_judge = prev_judge
 
-            if prevjudge and prevjudge not in judgesworkingthisheat and is_available_for_work(prevjudge):
-                chosenjudge = prevjudge
-
-            # Priorité 2 : choisir un juge qui est déjà dans ce bloc de travail
-            if chosenjudge is None:
+            # Priorité 2 : prendre un juge disponible, en favorisant ceux déjà dans leur bloc actif
+            if chosen_judge is None:
                 candidates = []
                 for j in judges:
                     s = state[j]
-                    if j in dispo and j not in judgesworkingthisheat and is_available_for_work(j):
+                    if (
+                        j in dispo
+                        and j not in judges_working_this_heat
+                        and s["status"] in ("AVAILABLE", "ON")
+                        and s["worked"] < on_target
+                    ):
                         candidates.append(j)
 
                 candidates = sorted(
                     candidates,
                     key=lambda j: (
                         0 if state[j]["status"] == "AVAILABLE" else 1,
-                        state[j]["heatssanspause"],
-                        state[j]["totalcount"]
+                        state[j]["worked"],
+                        state[j]["total"]
                     )
                 )
 
                 if candidates:
-                    chosenjudge = candidates[0]
+                    chosen_judge = candidates[0]
 
-            # Priorité 3 : dernier recours, on autorise un juge encore bloqué seulement si impossible
-            if chosenjudge is None:
+            # Dernier recours
+            if chosen_judge is None:
                 fallback = []
                 for j in judges:
                     s = state[j]
-                    if j in dispo and j not in judgesworkingthisheat:
+                    if j in dispo and j not in judges_working_this_heat:
                         fallback.append(j)
 
                 fallback = sorted(
                     fallback,
                     key=lambda j: (
                         0 if state[j]["status"] == "AVAILABLE" else 1,
-                        state[j]["heatssanspause"],
-                        state[j]["totalcount"]
+                        state[j]["worked"],
+                        state[j]["total"]
                     )
                 )
 
                 if fallback:
-                    chosenjudge = fallback[0]
+                    chosen_judge = fallback[0]
 
-            if chosenjudge is None:
-                warningslist.append(f"{wod} - {heatlabel} - Couloir {lane}: Aucun juge disponible !")
-                chosenjudge = "SANS JUGE"
+            if chosen_judge is None:
+                warnings_list.append(f"{wod} | {heat_label} | Couloir {lane} : Aucun juge disponible !")
+                chosen_judge = "SANS JUGE"
 
-            laneassignments[lane] = chosenjudge
+            lane_assignments[lane] = chosen_judge
 
-            if chosenjudge != "SANS JUGE":
-                planning[chosenjudge].append({
+            if chosen_judge != "SANS JUGE":
+                planning[chosen_judge].append({
                     "wod": clean_text(str(row["Workout"])),
                     "lane": lane,
                     "athlete": clean_text(str(row["Competitor"])),
                     "division": clean_text(str(row["Division"])),
                     "start": clean_text(str(row["Heat Start Time"])),
                     "end": clean_text(str(row["Heat End Time"])),
-                    "heat": clean_text(str(row["Heat"]),
-                    "heatnum": row["heatnum"],
+                    "heat": clean_text(str(row["Heat #"])),
+                    "heat_num": heat_num
                 })
-                judgesworkingthisheat.add(chosenjudge)
+                judges_working_this_heat.add(chosen_judge)
 
-        # 3) Mise à jour des compteurs après le heat
+                if state[chosen_judge]["current_lane"] is None:
+                    state[chosen_judge]["current_lane"] = lane
+                state[chosen_judge]["status"] = "ON"
+
+        # Mise à jour après le heat
         for j in judges:
             s = state[j]
-            if j in judgesworkingthisheat:
-                s["heatssanspause"] += 1
-                s["consecutiveoff"] = 0
-                s["totalcount"] += 1
-
-                if s["heatssanspause"] >= ONTARGET:
+            if j in judges_working_this_heat:
+                s["worked"] += 1
+                s["rest"] = 0
+                s["total"] += 1
+                if s["worked"] >= on_target:
                     s["status"] = "OFF"
-                    s["consecutiveoff"] = 0
-                    s["currentlane"] = None
+                    s["rest"] = 0
+                    s["current_lane"] = None
             else:
-                if s["status"] == "AVAILABLE":
-                    s["heatssanspause"] = 0
-                elif s["status"] == "ON":
-                    s["heatssanspause"] += 1
-                    if s["heatssanspause"] >= ONTARGET:
+                if s["status"] == "ON":
+                    s["worked"] += 1
+                    if s["worked"] >= on_target:
                         s["status"] = "OFF"
-                        s["consecutiveoff"] = 0
-                        s["currentlane"] = None
+                        s["rest"] = 0
+                        s["current_lane"] = None
+                elif s["status"] == "OFF":
+                    s["rest"] += 1
+                else:
+                    s["rest"] += 1
 
-        # 4) Mémorisation de la ligne dans le bloc courant
-        for lane, j in laneassignments.items():
-            if j != "SANS JUGE":
-                s = state[j]
-                if s["currentlane"] is None:
-                    s["currentlane"] = lane
-                elif s["currentlane"] != lane and s["heatssanspause"] < ONTARGET:
-                    s["currentlane"] = lane
-
-    return planning, warningslist
-
+    return planning, warnings_list
 
 # ========================
 # MAIN STREAMLIT
