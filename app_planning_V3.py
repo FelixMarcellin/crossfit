@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 10.1 : Stabilité des lignes + Retour CSV, Emojis et Stats d'équité
+Version 10.2 : Verrouillage strict des blocs ON et fixation absolue des lignes (Lanes)
 """
 
 import streamlit as st
@@ -289,7 +289,7 @@ def extract_heat_number(heat_str):
 
 
 # ====================================================
-# ATTRIBUTION ÉQUILIBRÉE AVEC STABILITÉ DES LIGNES
+# ATTRIBUTION ÉQUILIBRÉE - STRICT CONTINUITÉ BLOCK ET LANES
 # ====================================================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     planning = {j: [] for j in judges}
@@ -309,13 +309,14 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             "rows": sorted(g.to_dict("records"), key=lambda r: int(float(r["Lane"])))
         })
 
+    # État initial des juges
     state = {
         j: {
-            "phase": "AVAILABLE",
-            "remaining": 0,
-            "consecutive_heats": 0,
-            "count": 0,
-            "last_lane": None  # Stocke la ligne du juge pendant son bloc ON
+            "phase": "AVAILABLE",   # AVAILABLE, ON, OFF
+            "remaining": 0,         # Heats restants à faire/se reposer
+            "consecutive_heats": 0, # Compteur de sécurité
+            "count": 0,             # Total de heats effectués (équité)
+            "last_lane": None       # Verrou de ligne pendant le bloc ON
         }
         for j in judges
     }
@@ -334,32 +335,34 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
         assigned_this_heat = {}
 
         # ----------------====================================
-        # ETAPE 1 : Juges déjà "ON" -> Priorité absolue à garder la MEME ligne
+        # ETAPE 1 : Reconduire OBLIGATOIREMENT les juges déjà en train de travailler (phase == ON)
+        # S'ils ont une ligne mémorisée, on la bloque en priorité absolue.
         # ----------------====================================
-        active_judges = [
+        currently_on_judges = [
             j for j in judges 
             if state[j]["phase"] == "ON" 
             and state[j]["remaining"] > 0 
             and state[j]["consecutive_heats"] < (ON + 1)
             and j in dispo
         ]
-        active_judges = sorted(active_judges, key=lambda j: (state[j]["count"], judge_order[j]))
 
-        # Premier passage : on replace le juge sur sa ligne précédente si elle existe encore
-        for j in active_judges:
+        # 1er passage : Remettre le juge ON exactement sur sa Lane précédente
+        for j in currently_on_judges:
             target_lane = state[j]["last_lane"]
             if target_lane in required_lanes and target_lane not in assigned_this_heat:
                 assigned_this_heat[target_lane] = j
 
-        # Deuxième passage : si sa ligne précédente n'existe plus, on lui donne une ligne libre
+        # 2ème passage : Si sa Lane précédente n'existe plus dans ce heat (ex: moins d'athlètes)
+        # on lui donne une autre Lane libre pour qu'il finisse son bloc ON
         remaining_lanes = [l for l in required_lanes if l not in assigned_this_heat]
-        for j in active_judges:
+        for j in currently_on_judges:
             if j not in assigned_this_heat.values() and remaining_lanes:
                 lane = remaining_lanes.pop(0)
                 assigned_this_heat[lane] = j
 
         # ----------------====================================
-        # ETAPE 2 : Compléter les lignes vides avec les "AVAILABLE"
+        # ETAPE 2 : Compléter les Lanes vides restantes avec les juges FRAIS (AVAILABLE)
+        # On trie par équité (compteur total) UNIQUEMENT lors du démarrage d'un nouveau bloc
         # ----------------====================================
         if remaining_lanes:
             available_judges = [j for j in judges if state[j]["phase"] == "AVAILABLE" and j in dispo]
@@ -370,10 +373,10 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                     lane = remaining_lanes.pop(0)
                     assigned_this_heat[lane] = j
                     state[j]["phase"] = "ON"
-                    state[j]["remaining"] = ON
+                    state[j]["remaining"] = ON  # Engagement sur un bloc complet !
 
         # ----------------====================================
-        # ETAPE 3 : FALLBACK (Si pénurie de juges dispo)
+        # ETAPE 3 : FALLBACK (Pénurie critique)
         # ----------------====================================
         if remaining_lanes:
             already_working = set(assigned_this_heat.values())
@@ -389,13 +392,15 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 if remaining_lanes:
                     lane = remaining_lanes.pop(0)
                     assigned_this_heat[lane] = j
+                    # Si c'était un dépanneur au repos, il ne fait qu'UN SEUL heat
                     if state[j]["phase"] == "OFF":
                         state[j]["remaining"] = 1
 
         # ----------------====================================
-        # ENREGISTREMENT ET COMPTEURS
+        # ENREGISTREMENT ET ENCAISSEMENT DES ETATS
         # ----------------====================================
         working_now = assigned_this_heat.values()
+        
         for lane_id, j_name in assigned_this_heat.items():
             row_data = next(r for r in heat["rows"] if str(int(float(r["Lane"]))) == lane_id)
             planning[j_name].append({
@@ -411,7 +416,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             
             state[j_name]["count"] += 1
             state[j_name]["consecutive_heats"] += 1
-            state[j_name]["last_lane"] = lane_id # Verrouillage de la ligne pour le prochain heat
+            state[j_name]["last_lane"] = lane_id  # Verrouillage physique de la ligne
             
             if state[j_name]["phase"] == "ON":
                 state[j_name]["remaining"] -= 1
@@ -419,18 +424,23 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                     state[j_name]["phase"] = "OFF"
                     state[j_name]["remaining"] = OFF
 
+        # Pour les juges qui se reposent sur ce heat
         for j in judges:
             if j not in working_now:
                 state[j]["consecutive_heats"] = 0
-                state[j]["last_lane"] = None # Libère la ligne dès qu'il part en pause
                 
-                if state[j]["phase"] == "OFF":
+                # Un juge ON ne peut pas être coupé en plein vol (Sauf s'il est indisponible)
+                # S'il était ON mais n'a pas travaillé (ex: manque de lignes globales), il redevient disponible
+                if state[j]["phase"] == "ON":
+                    state[j]["phase"] = "AVAILABLE"
+                    state[j]["remaining"] = 0
+                    state[j]["last_lane"] = None
+                
+                elif state[j]["phase"] == "OFF":
+                    state[j]["last_lane"] = None # Libère sa ligne car il est officiellement en pause
                     state[j]["remaining"] -= 1
                     if state[j]["remaining"] <= 0:
                         state[j]["phase"] = "AVAILABLE"
-                elif state[j]["phase"] == "ON":
-                    state[j]["phase"] = "AVAILABLE"
-                    state[j]["remaining"] = 0
 
     return planning
 
@@ -450,8 +460,12 @@ def main():
         st.header("🙅‍♂️ Juges")
         judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
         if judges_file:
-            judges_df = pd.read_csv(judges_file, header=None, encoding='latin1')
-            judges = [clean_text(str(j)) for j in judges_df[0].dropna().tolist()]
+            try:
+                judges_df = pd.read_csv(judges_file, header=None, encoding='latin1')
+                judges = [clean_text(str(j)) for j in judges_df[0].dropna().tolist()]
+            except Exception as e:
+                st.error(f"Erreur de lecture du fichier CSV : {e}")
+                judges = []
         else:
             judges_text = st.text_area("Saisir les juges (un par ligne)", "Juge 1\nJuge 2\nJuge 3")
             judges = [clean_text(j.strip()) for j in judges_text.split('\n') if j.strip()]
