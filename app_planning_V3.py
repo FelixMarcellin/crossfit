@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 9.7 : Correction du manque de juges sur les lignes (Fallback total)
+Version 9.8 : Correction stricte des enchaînements (Respect Roulement +/- 1 Heat)
 """
 
 import streamlit as st
@@ -53,7 +53,6 @@ def clean_text(text):
 # LECTURE DU FICHIER EXCEL (feuille "Heats")
 # ========================
 def load_schedule_from_excel(uploaded_file):
-    """Lit le fichier Excel et extrait la feuille 'Heats' avec les bonnes colonnes"""
     xls = pd.ExcelFile(uploaded_file)
     
     sheet_name = None
@@ -209,7 +208,6 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
     for juge, creneaux in planning.items():
         for c in creneaux:
             key = (c['wod'], c['heat'], c['start'], c['end'])
-            # Sécurité pour s'assurer que lane est transformable en entier pour l'affichage
             try:
                 lane_key = int(float(c['lane']))
             except:
@@ -291,7 +289,7 @@ def extract_heat_number(heat_str):
 
 
 # ====================================================
-# ATTRIBUTION ÉQUILIBRÉE ET SÉCURISÉE (CORRIGÉE)
+# ATTRIBUTION ÉQUILIBRÉE AVEC RESPECT DE LA ROTATION
 # ====================================================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     planning = {j: [] for j in judges}
@@ -311,17 +309,17 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             "rows": sorted(g.to_dict("records"), key=lambda r: int(float(r["Lane"])))
         })
 
-    # État individuel des juges (Suivi du cycle On/Off)
+    # État individuel des juges (Suivi précis du cycle On/Off)
     state = {
         j: {
             "phase": "AVAILABLE",  # AVAILABLE, ON, OFF
-            "remaining": 0,        # Heats restants à faire (si ON) ou à se reposer (si OFF)
-            "count": 0             # Total de heats arbitrés (pour l'équilibre global)
+            "remaining": 0,        # Nombre de heats restants dans la phase actuelle
+            "consecutive_heats": 0, # Pour bloquer strictement les débordements
+            "count": 0             # Total de heats arbitrés
         }
         for j in judges
     }
 
-    # Parcours séquentiel de chaque Heat
     for heat in heats:
         wod = heat["wod"]
         rotation = rotation_config.get(wod, {"on": 3, "off": 3})
@@ -332,18 +330,20 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
         if not dispo:
             dispo = judges
 
-        # Liste des Lanes requises pour ce Heat précis
         required_lanes = sorted({str(int(float(r["Lane"]))) for r in heat["rows"]}, key=int)
-        
-        assigned_this_heat = {} # Associe lane -> juge pour ce heat
+        assigned_this_heat = {}
 
-        # ----------------------------------------------------
-        # ETAPE 1 : Reconduire en priorité les juges déjà "ON"
-        # ----------------------------------------------------
-        # S'ils travaillaient au heat précédent et qu'il leur reste des sessions à faire
-        active_judges = [j for j in judges if state[j]["phase"] == "ON" and state[j]["remaining"] > 0 and j in dispo]
-        
-        # On les trie par leur compteur global pour équilibrer
+        # ----------------====================================
+        # ETAPE 1 : Reconduire en priorité absolue les juges déjà "ON"
+        # ----------------====================================
+        # Uniquement s'ils n'ont pas encore atteint leur limite stricte (Configuration choisie + 1 maximum)
+        active_judges = [
+            j for j in judges 
+            if state[j]["phase"] == "ON" 
+            and state[j]["remaining"] > 0 
+            and state[j]["consecutive_heats"] < (ON + 1)
+            and j in dispo
+        ]
         active_judges = sorted(active_judges, key=lambda j: (state[j]["count"], judge_order[j]))
 
         for j in active_judges:
@@ -351,9 +351,9 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 lane = required_lanes[len(assigned_this_heat)]
                 assigned_this_heat[lane] = j
 
-        # ----------------------------------------------------
-        # ETAPE 2 : Compléter avec les juges "AVAILABLE" (Frais)
-        # ----------------------------------------------------
+        # ----------------====================================
+        # ETAPE 2 : Compléter avec les juges "AVAILABLE" (Frais / triés par équité)
+        # ----------------====================================
         if len(assigned_this_heat) < len(required_lanes):
             available_judges = [j for j in judges if state[j]["phase"] == "AVAILABLE" and j in dispo]
             available_judges = sorted(available_judges, key=lambda j: (state[j]["count"], judge_order[j]))
@@ -362,33 +362,38 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 if len(assigned_this_heat) < len(required_lanes):
                     lane = required_lanes[len(assigned_this_heat)]
                     assigned_this_heat[lane] = j
-                    # Initialisation de leur nouveau cycle
                     state[j]["phase"] = "ON"
                     state[j]["remaining"] = ON
 
-        # ----------------------------------------------------
-        # ETAPE 3 : PLAN DE SECOURS (FALLBACK COMPLET)
-        # S'il manque encore des juges, on force le rappel de n'importe quel juge dispo
-        # qui ne travaille pas déjà sur ce heat (même s'il est censé être en OFF)
-        # ----------------------------------------------------
+        # ----------------====================================
+        # ETAPE 3 : FALLBACK INTELLIGENT (Pas d'effet tunnel)
+        # Si manque de juges, on appelle un juge en "OFF" ou "AVAILABLE" restant
+        # ----------------====================================
         if len(assigned_this_heat) < len(required_lanes):
             already_working = set(assigned_this_heat.values())
-            backup_judges = [j for j in judges if j in dispo and j not in already_working]
-            # Priorité absolue à ceux qui ont le plus petit nombre total de heats arbitrés
+            
+            # On prend en priorité ceux qui ne dépasseront pas la règle du MAX (ON + 1)
+            backup_judges = [
+                j for j in judges 
+                if j in dispo 
+                and j not in already_working
+                and state[j]["consecutive_heats"] < (ON + 1)
+            ]
             backup_judges = sorted(backup_judges, key=lambda j: (state[j]["count"], judge_order[j]))
 
             for j in backup_judges:
                 if len(assigned_this_heat) < len(required_lanes):
                     lane = required_lanes[len(assigned_this_heat)]
                     assigned_this_heat[lane] = j
-                    # On le force en mode ON
-                    state[j]["phase"] = "ON"
-                    state[j]["remaining"] = ON
+                    
+                    # S'il était au repos (OFF), on ne le réactive pas pour tout un cycle ON complet,
+                    # on le fait juste dépanner pour CE heat isolé.
+                    if state[j]["phase"] == "OFF":
+                        state[j]["remaining"] = 1 # Repartira au repos direct après
 
-        # ----------------------------------------------------
-        # ÉCRITURE DANS LE PLANNING ET ENREGISTREMENT
-        # ----------------------------------------------------
-        # On boucle sur les vraies lignes Excel du heat pour enregistrer l'affectation
+        # ----------------====================================
+        # ÉCRITURE ET ENREGISTREMENT DES CRENEAUX
+        # ----------------====================================
         for row in heat["rows"]:
             lane = str(int(float(row["Lane"])))
             judge = assigned_this_heat.get(lane)
@@ -404,29 +409,35 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                     "heat": clean_text(str(row["Heat #"])),
                     "heat_num": heat["heat_num"]
                 })
-                state[judge]["count"] += 1
 
-        # ----------------------------------------------------
-        # MISE À JOUR DES COMPTEURS POST-HEAT
-        # ----------------------------------------------------
+        # ----------------====================================
+        # MISE À JOUR RIGIDE DES COMPTEURS POST-HEAT
+        # ----------------====================================
         for j in judges:
             if j in assigned_this_heat.values():
-                # Le juge a travaillé sur ce heat, on réduit son crédit restant du cycle ON
+                # Le juge a travaillé
+                state[j]["count"] += 1
+                state[j]["consecutive_heats"] += 1
+                
                 if state[j]["phase"] == "ON":
                     state[j]["remaining"] -= 1
                     if state[j]["remaining"] <= 0:
-                        # Fin du cycle ON -> Il passe au repos (OFF)
                         state[j]["phase"] = "OFF"
                         state[j]["remaining"] = OFF
+                elif state[j]["phase"] == "OFF":
+                    # Cas du dépanneur forcé : il retourne en OFF au prochain coup
+                    state[j]["remaining"] = OFF
             else:
-                # Le juge n'a pas travaillé sur ce heat
+                # Le juge n'a PAS travaillé sur ce heat (il se repose)
+                state[j]["consecutive_heats"] = 0 # Chaîne coupée !
+                
                 if state[j]["phase"] == "OFF":
                     state[j]["remaining"] -= 1
                     if state[j]["remaining"] <= 0:
                         state[j]["phase"] = "AVAILABLE"
                 elif state[j]["phase"] == "ON":
-                    # Sécurité : S'il était ON mais n'a pas pu être placé (faute de lanes), 
-                    # il redevient disponible pour ne pas rester bloqué
+                    # S'il devait travailler mais a été sauté (pas assez de lignes), 
+                    # on réinitialise son état pour éviter qu'il soit bloqué
                     state[j]["phase"] = "AVAILABLE"
                     state[j]["remaining"] = 0
 
