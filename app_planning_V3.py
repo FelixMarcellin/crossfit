@@ -315,6 +315,11 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
     planning = {j: [] for j in judges}
 
+    judge_order = {
+        judge: idx
+        for idx, judge in enumerate(judges)
+    }
+
     df = schedule.copy()
     df["heat_num"] = df["Heat #"].apply(extract_heat_number)
 
@@ -430,7 +435,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 candidates,
                 key=lambda j: (
                     state[j]["count"],
-                    j
+                    judge_order[j]
                 )
             )
 
@@ -455,7 +460,10 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
                 extra = sorted(
                     extra,
-                    key=lambda j: state[j]["count"]
+                    key=lambda j: (
+                        state[j]["count"],
+                        judge_order[j]
+                    )
                 )
 
                 for j in extra:
