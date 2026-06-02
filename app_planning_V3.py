@@ -578,7 +578,7 @@ def main():
 
     
         
-        st.info(f"🔄 Système sélectionné : {rotation_system['name']}")
+        
         st.header("🖼️ Logo (pied de page)")
         st.info("Le logo apparaîtra en bas de chaque page")
         logo_file = st.file_uploader("Uploader un logo", type=["png", "jpg", "jpeg"])
@@ -607,6 +607,10 @@ def main():
             rotation_by_wod = {}
 
             st.header("⚙️ Roulement par WOD")
+            st.info(
+                    "Choisissez un roulement spécifique pour chaque WOD "
+                    "(ex : 3-on/3-off, 2-on/2-off, 4-on/2-off)."
+                )
             
             rotation_options = [
                 {"name": "1-on/1-off", "on": 1, "off": 1},
@@ -647,7 +651,12 @@ def main():
                 total = sum(counts.values())
                 target = total // len(judges) if len(judges) > 0 else 0
                 
-                st.info(f"**Système de roulement :** {rotation_system['name']}")
+                st.write("### Roulements utilisés")
+
+                for wod, rotation in rotation_by_wod.items():
+                    st.write(
+                        f"**{wod}** : {rotation['on']}-on / {rotation['off']}-off"
+                    )
                 
                 for j in sorted(counts, key=counts.get, reverse=True):
                     ecart = counts[j] - target
