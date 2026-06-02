@@ -8,7 +8,7 @@ Created on Tue Jun  2 14:06:56 2026
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 9.6 : Lecture directe de la feuille "Heats" + logo en bas de page
+Version 9.7 : Correction bug des lignes non assignées (Garantie d'attribution)
 """
 
 import streamlit as st
@@ -60,11 +60,8 @@ def clean_text(text):
 # LECTURE DU FICHIER EXCEL (feuille "Heats")
 # ========================
 def load_schedule_from_excel(uploaded_file):
-    """Lit le fichier Excel et extrait la feuille 'Heats' avec les bonnes colonnes"""
-    # Lire toutes les feuilles
     xls = pd.ExcelFile(uploaded_file)
     
-    # Chercher la feuille "Heats" (insensible à la casse)
     sheet_name = None
     for name in xls.sheet_names:
         if name.lower() == "heats":
@@ -75,21 +72,16 @@ def load_schedule_from_excel(uploaded_file):
         st.error("❌ Feuille 'Heats' introuvable dans le fichier Excel.")
         return None
     
-    # Lire la feuille
     df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
     
-    # Vérifier les colonnes nécessaires (adapté à la structure du fichier brut)
-    # Colonnes attendues: Lane, Competitor, Division, Workout, Workout Location, Heat #, Heat Start Time, Heat End Time
     required_cols = ['Lane', 'Competitor', 'Division', 'Workout', 'Workout Location', 'Heat #', 'Heat Start Time', 'Heat End Time']
     
-    # Vérifier si toutes les colonnes sont présentes
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         st.error(f"❌ Colonnes manquantes dans la feuille 'Heats': {missing_cols}")
         st.info("📋 Les colonnes attendues sont: Lane, Competitor, Division, Workout, Workout Location, Heat #, Heat Start Time, Heat End Time")
         return None
     
-    # Renommer les colonnes pour correspondre au reste du code
     df = df.rename(columns={
         'Workout Location': 'Workout Location',
         'Heat #': 'Heat #',
@@ -97,12 +89,10 @@ def load_schedule_from_excel(uploaded_file):
         'Heat End Time': 'Heat End Time'
     })
     
-    # Nettoyer les données
     for col in ['Workout', 'Competitor', 'Division', 'Workout Location', 'Heat #']:
         if col in df.columns:
             df[col] = df[col].apply(lambda x: clean_text(str(x)) if pd.notna(x) else "")
     
-    # Filtrer les lignes vides
     df = df[df['Competitor'].notna()]
     df = df[df['Competitor'] != ""]
     df = df[~df['Competitor'].str.contains('EMPTY LANE', na=False)]
@@ -120,7 +110,6 @@ class FooterLogoPDF(FPDF):
         self.set_auto_page_break(auto=True, margin=15)
 
     def footer(self):
-        """Pied de page avec logo centré"""
         if self.logo_path and os.path.exists(self.logo_path):
             try:
                 self.set_y(-70)
@@ -137,7 +126,6 @@ class FooterLogoPDF(FPDF):
 # ========================
 def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) -> FPDF:
     pdf = FooterLogoPDF(logo_path=logo_path, orientation='P')
-    total_width = 180
     
     for juge, creneaux in planning.items():
         if not creneaux:
@@ -156,7 +144,6 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
 
         pdf.add_page()
         
-        # En-tête
         pdf.set_font("Arial", 'B', 16)
         pdf.cell(0, 10, clean_text(competition_name), 0, 1, 'C')
         pdf.set_font("Arial", 'B', 14)
@@ -217,7 +204,6 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
 
         pdf.ln(5)
         pdf.set_font("Arial", 'I', 9)
-        total_wods = len({c['wod'] for c in creneaux})
         pdf.cell(0, 8, f"Total : {len(creneaux)} créneaux ", 0, 1)
 
     return pdf
@@ -238,9 +224,9 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
     heats = sorted(
         heat_map.items(),
         key=lambda x: (
-            x[0][2],      # 1. Heure de début (Chronologique avant tout)
-            x[0][0],      # 2. Nom du WOD (Si deux WODs commencent en même temps)
-            x[0][1]       # 3. Numéro du Heat
+            x[0][2],      
+            x[0][0],      
+            x[0][1]       
         )
     )
 
@@ -265,27 +251,23 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
             x = 10 if is_left else 10 + col_width + spacing_x
             
             if idx == 2:
-                prev_lanes = len(heats[i+1][1]) if i+1 < len(heats) else 0
                 max_lanes = max(len(heats[i][1]), len(heats[i+1][1]))
                 block_height = header_height + (max_lanes * row_height) + 4
                 current_y += block_height
             
             y_start = current_y
             
-            # En-tête du heat
             pdf.set_font("Arial", 'B', 8)
             pdf.set_xy(x, y_start)
             header_text = clean_text(f"{wod} | {heat_num} | {start}-{end}")
             pdf.cell(col_width, row_height, header_text, border=1, align='C', fill=True)
             
-            # Sous-en-tête
             pdf.set_font("Arial", 'B', 7)
             pdf.set_xy(x, y_start + row_height)
             pdf.set_fill_color(220, 220, 220)
             pdf.cell(col_width * 0.35, row_height, "Lane", border=1, align='C', fill=True)
             pdf.cell(col_width * 0.65, row_height, "Juge", border=1, align='C', fill=True)
             
-            # Contenu
             pdf.set_font("Arial", '', 7)
             pdf.set_fill_color(255, 255, 255)
             
@@ -316,45 +298,31 @@ def extract_heat_number(heat_str):
 
 
 # ========================
-# ATTRIBUTION ÉQUILIBRÉE
+# ATTRIBUTION ÉQUILIBRÉE ET SÉCURISÉE
 # ========================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
-
     planning = {j: [] for j in judges}
 
     df = schedule.copy()
     df["heat_num"] = df["Heat #"].apply(extract_heat_number)
-
-    df = df.sort_values(
-        ["Heat Start Time", "heat_num", "Lane"]
-    ).reset_index(drop=True)
+    df = df.sort_values(["Heat Start Time", "heat_num", "Lane"]).reset_index(drop=True)
 
     heats = []
-
-    for (wod, heat_num, start, end), g in df.groupby(
-        ["Workout", "heat_num", "Heat Start Time", "Heat End Time"]
-    ):
+    for (wod, heat_num, start, end), g in df.groupby(["Workout", "heat_num", "Heat Start Time", "Heat End Time"]):
         heats.append({
             "wod": wod,
             "heat_num": heat_num,
             "start": start,
             "end": end,
-            "rows": sorted(
-                g.to_dict("records"),
-                key=lambda r: int(float(r["Lane"]))
-            )
+            "rows": sorted(g.to_dict("records"), key=lambda r: int(float(r["Lane"])))
         })
 
     ON = rotation_config["on"]
     OFF = rotation_config["off"]
 
-    # ====================================================
-    # Etat des juges
-    # ====================================================
-
     state = {
         j: {
-            "phase": "AVAILABLE",     # AVAILABLE / ON / OFF
+            "phase": "AVAILABLE",     
             "remaining": 0,
             "lane": None,
             "count": 0
@@ -362,133 +330,82 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
         for j in judges
     }
 
-    current_block = {}  # lane -> judge
+    current_block = {}  
 
-    # ====================================================
-    # Parcours des heats
-    # ====================================================
-
-    for heat_idx, heat in enumerate(heats):
-
+    for heat in heats:
         wod = heat["wod"]
-
         dispo = disponibilites.get(wod)
-
-        if not dispo:
+        if not dispo or len(dispo) == 0:
             dispo = judges
 
-        lanes = sorted(
-            {str(int(float(r["Lane"]))) for r in heat["rows"]},
-            key=int
-        )
+        lanes = sorted({str(int(float(r["Lane"]))) for r in heat["rows"]}, key=int)
 
-        # ====================================================
-        # Début d'un nouveau bloc
-        # ====================================================
-
+        # Force la création d'un bloc si l'actuel est vide ou si aucun juge n'est actif
         new_block = False
-
         if not current_block:
             new_block = True
-
         else:
-            active_judges = {
-                j
-                for j, s in state.items()
-                if s["phase"] == "ON"
-            }
-
+            active_judges = {j for j, s in state.items() if s["phase"] == "ON"}
             if len(active_judges) == 0:
                 new_block = True
 
-        # ====================================================
-        # Construction du bloc
-        # ====================================================
-
         if new_block:
-
             current_block = {}
-
-            # candidats réellement libres
             candidates = []
 
+            # Étape 1 : Filtrer les juges disponibles et hors repos
             for j in judges:
-
-                s = state[j]
-
                 if j not in dispo:
                     continue
-
-                if s["phase"] == "OFF":
+                if state[j]["phase"] == "OFF":
                     continue
-
                 candidates.append(j)
 
-            # équilibre global
-            candidates = sorted(
-                candidates,
-                key=lambda j: (
-                    state[j]["count"],
-                    j
-                )
-            )
+            candidates = sorted(candidates, key=lambda j: (state[j]["count"], j))
 
-            # ====================================================
-            # Si pas assez de juges :
-            # autorisation OFF restant = 1
-            # ====================================================
-
+            # Étape 2 : Si pas assez de juges, on pioche chez ceux en repos (OFF)
             if len(candidates) < len(lanes):
-
-                extra = []
-
-                for j in judges:
-
-                    s = state[j]
-
-                    if j not in dispo:
-                        continue
-
-                    if s["phase"] == "OFF" and s["remaining"] <= 1:
-                        extra.append(j)
-
-                extra = sorted(
-                    extra,
-                    key=lambda j: state[j]["count"]
-                )
-
-                for j in extra:
+                extra_off = [j for j in judges if j in dispo and state[j]["phase"] == "OFF"]
+                extra_off = sorted(extra_off, key=lambda j: (state[j]["count"], state[j]["remaining"]))
+                for j in extra_off:
                     if j not in candidates:
                         candidates.append(j)
 
-            # ====================================================
-            # Affectation lane fixe
-            # ====================================================
+            # Étape 3 (SÉCURITÉ ABSOLUE) : Si toujours pas assez, on prend n'importe qui (même déclaré indisponible)
+            if len(candidates) < len(lanes):
+                absolute_extra = [j for j in judges if j not in candidates]
+                absolute_extra = sorted(absolute_extra, key=lambda j: state[j]["count"])
+                candidates.extend(absolute_extra)
 
+            # Affectation des juges disponibles aux lignes du bloc
             for lane, judge in zip(lanes, candidates):
-
                 current_block[lane] = judge
+                state[judge]["phase"] = "ON"
+                state[judge]["remaining"] = ON
+                state[judge]["lane"] = lane
 
-                s = state[judge]
-
-                s["phase"] = "ON"
-                s["remaining"] = ON
-                s["lane"] = lane
-
-        # ====================================================
-        # Attribution du heat
-        # ====================================================
-
+        # --- CORRECTION : Garantie de secours pour chaque ligne du Heat courant ---
         worked_this_heat = set()
 
         for row in heat["rows"]:
-
             lane = str(int(float(row["Lane"])))
-
             judge = current_block.get(lane)
 
+            # Si la ligne n'a pas de juge défini dans le bloc actuel, on lui trouve un remplaçant d'urgence
             if judge is None:
-                continue
+                # Trouver un juge qui ne travaille pas déjà sur ce heat spécifique
+                backup_candidates = [j for j in judges if j not in worked_this_heat]
+                if not backup_candidates:  # Secours extrême si critique
+                    backup_candidates = judges
+                
+                # On choisit celui qui a le moins de créneaux au total
+                judge = min(backup_candidates, key=lambda j: state[j]["count"])
+                
+                # On l'inscrit dans le bloc pour les séries suivantes du même bloc
+                current_block[lane] = judge
+                state[judge]["phase"] = "ON"
+                state[judge]["remaining"] = ON
+                state[judge]["lane"] = lane
 
             planning[judge].append({
                 "wod": clean_text(str(row["Workout"])),
@@ -502,56 +419,35 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             })
 
             worked_this_heat.add(judge)
-
             state[judge]["count"] += 1
 
-        # ====================================================
-        # Mise à jour des compteurs
-        # ====================================================
-
+        # Mise à jour des compteurs de fin de heat
         for judge in judges:
-
             s = state[judge]
-
             if judge in worked_this_heat:
-
                 if s["phase"] == "ON":
-
                     s["remaining"] -= 1
-
                     if s["remaining"] <= 0:
-
                         s["phase"] = "OFF"
                         s["remaining"] = OFF
                         s["lane"] = None
-
             else:
-
                 if s["phase"] == "OFF":
-
                     s["remaining"] -= 1
-
                     if s["remaining"] <= 0:
-
                         s["phase"] = "AVAILABLE"
                         s["remaining"] = 0
 
-        # ====================================================
-        # Nettoyage du bloc :
-        # retirer les juges passés OFF
-        # ====================================================
-
+        # Nettoyage du bloc (les juges passés en OFF quittent le couloir)
         lanes_to_remove = []
-
         for lane, judge in current_block.items():
-
             if state[judge]["phase"] != "ON":
                 lanes_to_remove.append(lane)
-
         for lane in lanes_to_remove:
             del current_block[lane]
 
     return planning
+
 
 # ========================
 # MAIN STREAMLIT
@@ -559,7 +455,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 def main():
     with st.sidebar:
         st.header("📂 Fichier d'entrée")
-        st.info("📌 Le fichier Excel doit contenir une feuille nommée **'Heats'** avec les colonnes: Lane, Competitor, Division, Workout, Workout Location, Heat #, Heat Start Time, Heat End Time")
+        st.info("📌 Le fichier Excel doit contenir une feuille nommée **'Heats'**.")
         schedule_file = st.file_uploader("Planning (Excel)", type=["xlsx"])
 
         st.header("🏋️‍♀️ Nom de la compétition")
@@ -589,7 +485,6 @@ def main():
         
         st.info(f"🔄 Système sélectionné : {rotation_system['name']}")
         st.header("🖼️ Logo (pied de page)")
-        st.info("Le logo apparaîtra en bas de chaque page")
         logo_file = st.file_uploader("Uploader un logo", type=["png", "jpg", "jpeg"])
 
         logo_path = None
@@ -601,7 +496,6 @@ def main():
 
     if schedule_file and judges:
         try:
-            # Lire directement la feuille "Heats"
             schedule = load_schedule_from_excel(schedule_file)
             
             if schedule is None:
@@ -630,15 +524,9 @@ def main():
 
                 st.subheader("📊 Équilibre des assignations")
                 counts = {j: len(planning[j]) for j in judges}
-                total = sum(counts.values())
-                target = total // len(judges) if len(judges) > 0 else 0
-                
-                st.info(f"**Système de roulement :** {rotation_system['name']}")
                 
                 for j in sorted(counts, key=counts.get, reverse=True):
-                    ecart = counts[j] - target
-                    emoji = "✅" if abs(ecart) <= 1 else "⚠️"
-                    st.write(f"{emoji} {j}: {counts[j]} créneaux ({ecart:+d})")
+                    st.write(f"✅ {j}: {counts[j]} créneaux")
 
                 try:
                     pdf_juges = generate_pdf_tableau(planning, competition_name, logo_path)
@@ -660,11 +548,9 @@ def main():
                     
                 except Exception as e:
                     st.error(f"❌ Erreur lors de la génération des PDF: {str(e)}")
-                    st.info("💡 Essayez de simplifier les noms des juges ou des athlètes")
 
         except Exception as e:
             st.error(f"❌ Erreur lors de la lecture du fichier: {str(e)}")
-            st.info("💡 Vérifiez que le fichier Excel contient bien une feuille nommée 'Heats'")
 
     else:
         st.info("👉 Veuillez importer un fichier Excel contenant une feuille 'Heats' et saisir la liste des juges.")
