@@ -246,17 +246,16 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     state = {
         j: {
             "status": "AVAILABLE",   # AVAILABLE, ON, OFF
-            "worked": 0,             # heats consécutifs travaillés dans le bloc
-            "rest": 0,               # heats consécutifs de repos
-            "total": 0,              # équilibre global
-            "current_lane": None     # ligne conservée pendant le bloc
+            "worked": 0,             # créneaux travaillés dans le bloc courant
+            "rest": 0,               # créneaux de repos consécutifs
+            "total": 0,              # équilibrage global
+            "current_lane": None
         }
         for j in judges
     }
 
     for heat in heats:
         wod = heat["wod"]
-        heat_label = f"Heat {heat['heat_num']} ({heat['start']}-{heat['end']})"
         dispo = disponibilites.get(wod, judges)
         if not dispo:
             dispo = judges
@@ -264,7 +263,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
         judges_working_this_heat = set()
         lane_assignments = {}
 
-        # Mise à jour des statuts avant l'affectation
+        # Mise à jour des compteurs de repos avant l'affectation
         for j in judges:
             s = state[j]
             if s["status"] == "OFF":
@@ -279,18 +278,24 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             lane = str(int(float(row["Lane"])))
             chosen_judge = None
 
-            # Priorité 1 : garder le même juge sur la même ligne
-            if lane in lane_assignments:
-                prev_judge = lane_assignments[lane]
+            # 1) Garder le juge déjà sur la ligne si possible
+            prev_judge = None
+            for j in judges:
+                if state[j]["current_lane"] == lane:
+                    prev_judge = j
+                    break
+
+            if prev_judge is not None:
+                s = state[prev_judge]
                 if (
                     prev_judge in dispo
                     and prev_judge not in judges_working_this_heat
-                    and state[prev_judge]["status"] in ("AVAILABLE", "ON")
-                    and state[prev_judge]["worked"] < on_target
+                    and s["status"] in ("AVAILABLE", "ON")
+                    and s["worked"] < on_target
                 ):
                     chosen_judge = prev_judge
 
-            # Priorité 2 : prendre un juge disponible, en favorisant ceux déjà dans leur bloc actif
+            # 2) Sinon choisir le juge le plus "en retard" en nombre total de créneaux
             if chosen_judge is None:
                 candidates = []
                 for j in judges:
@@ -306,16 +311,16 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 candidates = sorted(
                     candidates,
                     key=lambda j: (
-                        0 if state[j]["status"] == "AVAILABLE" else 1,
-                        state[j]["worked"],
-                        state[j]["total"]
+                        state[j]["total"],
+                        0 if state[j]["status"] == "ON" else 1,
+                        state[j]["worked"]
                     )
                 )
 
                 if candidates:
                     chosen_judge = candidates[0]
 
-            # Dernier recours
+            # 3) Dernier recours si pénurie
             if chosen_judge is None:
                 fallback = []
                 for j in judges:
@@ -326,9 +331,9 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 fallback = sorted(
                     fallback,
                     key=lambda j: (
-                        0 if state[j]["status"] == "AVAILABLE" else 1,
-                        state[j]["worked"],
-                        state[j]["total"]
+                        state[j]["total"],
+                        0 if state[j]["status"] == "ON" else 1,
+                        state[j]["worked"]
                     )
                 )
 
@@ -336,7 +341,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                     chosen_judge = fallback[0]
 
             if chosen_judge is None:
-                warnings_list.append(f"{wod} | {heat_label} | Couloir {lane} : Aucun juge disponible !")
+                warnings_list.append(f"{wod} | Heat {heat['heat_num']} | Couloir {lane} : Aucun juge disponible !")
                 chosen_judge = "SANS JUGE"
 
             lane_assignments[lane] = chosen_judge
@@ -350,13 +355,12 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                     "start": clean_text(str(row["Heat Start Time"])),
                     "end": clean_text(str(row["Heat End Time"])),
                     "heat": clean_text(str(row["Heat #"])),
-                    "heat_num": heat_num
+                    "heat_num": heat["heat_num"]
                 })
                 judges_working_this_heat.add(chosen_judge)
 
                 if state[chosen_judge]["current_lane"] is None:
                     state[chosen_judge]["current_lane"] = lane
-                state[chosen_judge]["status"] = "ON"
 
         # Mise à jour après le heat
         for j in judges:
@@ -370,15 +374,9 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                     s["rest"] = 0
                     s["current_lane"] = None
             else:
-                if s["status"] == "ON":
-                    s["worked"] += 1
-                    if s["worked"] >= on_target:
-                        s["status"] = "OFF"
-                        s["rest"] = 0
-                        s["current_lane"] = None
+                if s["status"] == "AVAILABLE":
+                    s["worked"] = 0
                 elif s["status"] == "OFF":
-                    s["rest"] += 1
-                else:
                     s["rest"] += 1
 
     return planning, warnings_list
