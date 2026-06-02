@@ -8,7 +8,7 @@ Created on Tue Jun  2 14:06:56 2026
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 9.7 : Correction bug des lignes non assignées (Garantie d'attribution)
+Version 9.8 : Correction stricte de l'unicité des juges par Heat
 """
 
 import streamlit as st
@@ -79,7 +79,6 @@ def load_schedule_from_excel(uploaded_file):
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         st.error(f"❌ Colonnes manquantes dans la feuille 'Heats': {missing_cols}")
-        st.info("📋 Les colonnes attendues sont: Lane, Competitor, Division, Workout, Workout Location, Heat #, Heat Start Time, Heat End Time")
         return None
     
     df = df.rename(columns={
@@ -141,7 +140,6 @@ def generate_pdf_tableau(planning: dict, competition_name: str, logo_path=None) 
                     return pd.NaT
 
         creneaux = sorted(creneaux, key=lambda c: parse_time(c.get('start', '')))
-
         pdf.add_page()
         
         pdf.set_font("Arial", 'B', 16)
@@ -243,7 +241,6 @@ def generate_heat_pdf(planning: dict, competition_name: str, logo_path=None) -> 
         pdf.ln(4)
 
         current_y = 25
-        
         page_heats = heats[i:i+4]
         
         for idx, ((wod, heat_num, start, end), lanes) in enumerate(page_heats):
@@ -298,10 +295,11 @@ def extract_heat_number(heat_str):
 
 
 # ========================
-# ATTRIBUTION ÉQUILIBRÉE ET SÉCURISÉE
+# ATTRIBUTION ÉQUILIBRÉE SÉCURISÉE (STRICTE UNICITÉ)
 # ========================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     planning = {j: [] for j in judges}
+    warnings_list = []  # Pour remonter les vrais manques à l'utilisateur
 
     df = schedule.copy()
     df["heat_num"] = df["Heat #"].apply(extract_heat_number)
@@ -334,13 +332,14 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
     for heat in heats:
         wod = heat["wod"]
+        heat_label = f"Heat {heat['heat_num']} ({heat['start']})"
         dispo = disponibilites.get(wod)
         if not dispo or len(dispo) == 0:
             dispo = judges
 
         lanes = sorted({str(int(float(r["Lane"]))) for r in heat["rows"]}, key=int)
 
-        # Force la création d'un bloc si l'actuel est vide ou si aucun juge n'est actif
+        # Forcer la réévaluation du bloc si vide ou si plus personne n'est ON
         new_block = False
         if not current_block:
             new_block = True
@@ -353,17 +352,13 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             current_block = {}
             candidates = []
 
-            # Étape 1 : Filtrer les juges disponibles et hors repos
+            # 1. Juges dispo et libres
             for j in judges:
-                if j not in dispo:
-                    continue
-                if state[j]["phase"] == "OFF":
-                    continue
-                candidates.append(j)
-
+                if j in dispo and state[j]["phase"] != "OFF":
+                    candidates.append(j)
             candidates = sorted(candidates, key=lambda j: (state[j]["count"], j))
 
-            # Étape 2 : Si pas assez de juges, on pioche chez ceux en repos (OFF)
+            # 2. Si pas assez, on pioche chez les OFF (en repos)
             if len(candidates) < len(lanes):
                 extra_off = [j for j in judges if j in dispo and state[j]["phase"] == "OFF"]
                 extra_off = sorted(extra_off, key=lambda j: (state[j]["count"], state[j]["remaining"]))
@@ -371,57 +366,59 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                     if j not in candidates:
                         candidates.append(j)
 
-            # Étape 3 (SÉCURITÉ ABSOLUE) : Si toujours pas assez, on prend n'importe qui (même déclaré indisponible)
+            # 3. Si TOUJOURS pas assez, on prend n'importe qui (même déclaré indisponible sur le WOD)
             if len(candidates) < len(lanes):
                 absolute_extra = [j for j in judges if j not in candidates]
                 absolute_extra = sorted(absolute_extra, key=lambda j: state[j]["count"])
                 candidates.extend(absolute_extra)
 
-            # Affectation des juges disponibles aux lignes du bloc
+            # Remplissage initial du bloc
             for lane, judge in zip(lanes, candidates):
                 current_block[lane] = judge
                 state[judge]["phase"] = "ON"
                 state[judge]["remaining"] = ON
                 state[judge]["lane"] = lane
 
-        # --- CORRECTION : Garantie de secours pour chaque ligne du Heat courant ---
+        # --- AFFECTATION ET VÉRIFICATION STRICTE D'UNICITÉ ---
         worked_this_heat = set()
 
         for row in heat["rows"]:
             lane = str(int(float(row["Lane"])))
             judge = current_block.get(lane)
 
-            # Si la ligne n'a pas de juge défini dans le bloc actuel, on lui trouve un remplaçant d'urgence
-            if judge is None:
-                # Trouver un juge qui ne travaille pas déjà sur ce heat spécifique
+            # SÉCURITÉ ULTRA-STRICTE : Si le juge prévu bosse déjà sur une autre ligne de ce heat, ou est absent
+            if judge is None or judge in worked_this_heat:
+                # On cherche un remplaçant d'urgence qui n'est absolument pas sur ce heat
                 backup_candidates = [j for j in judges if j not in worked_this_heat]
-                if not backup_candidates:  # Secours extrême si critique
-                    backup_candidates = judges
                 
-                # On choisit celui qui a le moins de créneaux au total
-                judge = min(backup_candidates, key=lambda j: state[j]["count"])
-                
-                # On l'inscrit dans le bloc pour les séries suivantes du même bloc
-                current_block[lane] = judge
-                state[judge]["phase"] = "ON"
-                state[judge]["remaining"] = ON
-                state[judge]["lane"] = lane
+                if backup_candidates:
+                    # On prend le moins occupé
+                    judge = min(backup_candidates, key=lambda j: state[j]["count"])
+                    # On met à jour le bloc pour stabiliser
+                    current_block[lane] = judge
+                    state[judge]["phase"] = "ON"
+                    state[judge]["remaining"] = ON
+                    state[judge]["lane"] = lane
+                else:
+                    # Cas mathématiquement impossible (ex: 6 couloirs actifs mais seulement 4 juges enregistrés au total)
+                    judge = "SANS JUGE"
+                    warnings_list.append(f"⚠️ {wod} | {heat_label} | Couloir {lane} : Aucun juge disponible (Pas assez de juges au total !)")
 
-            planning[judge].append({
-                "wod": clean_text(str(row["Workout"])),
-                "lane": lane,
-                "athlete": clean_text(str(row["Competitor"])),
-                "division": clean_text(str(row["Division"])),
-                "start": clean_text(str(row["Heat Start Time"])),
-                "end": clean_text(str(row["Heat End Time"])),
-                "heat": clean_text(str(row["Heat #"])),
-                "heat_num": heat["heat_num"]
-            })
+            if judge != "SANS JUGE":
+                planning[judge].append({
+                    "wod": clean_text(str(row["Workout"])),
+                    "lane": lane,
+                    "athlete": clean_text(str(row["Competitor"])),
+                    "division": clean_text(str(row["Division"])),
+                    "start": clean_text(str(row["Heat Start Time"])),
+                    "end": clean_text(str(row["Heat End Time"])),
+                    "heat": clean_text(str(row["Heat #"])),
+                    "heat_num": heat["heat_num"]
+                })
+                worked_this_heat.add(judge)
+                state[judge]["count"] += 1
 
-            worked_this_heat.add(judge)
-            state[judge]["count"] += 1
-
-        # Mise à jour des compteurs de fin de heat
+        # Mise à jour des compteurs après le heat
         for judge in judges:
             s = state[judge]
             if judge in worked_this_heat:
@@ -438,15 +435,15 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                         s["phase"] = "AVAILABLE"
                         s["remaining"] = 0
 
-        # Nettoyage du bloc (les juges passés en OFF quittent le couloir)
+        # Nettoyage du bloc (les juges qui passent OFF libèrent le couloir)
         lanes_to_remove = []
         for lane, judge in current_block.items():
-            if state[judge]["phase"] != "ON":
+            if judge not in state or state[judge]["phase"] != "ON":
                 lanes_to_remove.append(lane)
         for lane in lanes_to_remove:
             del current_block[lane]
 
-    return planning
+    return planning, warnings_list
 
 
 # ========================
@@ -483,10 +480,7 @@ def main():
             format_func=lambda x: x["name"]
         )
         
-        st.info(f"🔄 Système sélectionné : {rotation_system['name']}")
-        st.header("🖼️ Logo (pied de page)")
         logo_file = st.file_uploader("Uploader un logo", type=["png", "jpg", "jpeg"])
-
         logo_path = None
         if logo_file:
             temp_logo = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
@@ -497,12 +491,7 @@ def main():
     if schedule_file and judges:
         try:
             schedule = load_schedule_from_excel(schedule_file)
-            
-            if schedule is None:
-                st.stop()
-            
-            if schedule.empty:
-                st.error("❌ Aucune donnée trouvée dans la feuille 'Heats'")
+            if schedule is None or schedule.empty:
                 st.stop()
             
             wods = sorted(schedule['Workout'].dropna().unique())
@@ -520,11 +509,17 @@ def main():
                             disponibilites[wod] = st.multiselect("Juges disponibles", judges, key=f"multi_{wod}")
 
             if st.button("🦄 Générer le planning"):
-                planning = assign_judges_equitable(schedule, judges, disponibilites, rotation_system)
+                planning, warnings = assign_judges_equitable(schedule, judges, disponibilites, rotation_system)
+
+                # Affichage des alertes critiques de manque de personnel
+                if warnings:
+                    st.warning("🚨 **Alertes effectifs insuffisants :**")
+                    for w in warnings:
+                        st.write(w)
+                    st.info("💡 Ajoutez des juges à votre liste ou cochez plus de juges disponibles pour ces WODs.")
 
                 st.subheader("📊 Équilibre des assignations")
                 counts = {j: len(planning[j]) for j in judges}
-                
                 for j in sorted(counts, key=counts.get, reverse=True):
                     st.write(f"✅ {j}: {counts[j]} créneaux")
 
@@ -544,17 +539,10 @@ def main():
                             st.download_button("📗 Télécharger planning par heat", f, "planning_heats.pdf")
                         os.unlink(t2.name)
                     
-                    st.success("✅ Planning généré avec succès !")
+                    st.success("✅ Planning généré sans doublons de heat !")
                     
                 except Exception as e:
                     st.error(f"❌ Erreur lors de la génération des PDF: {str(e)}")
 
         except Exception as e:
-            st.error(f"❌ Erreur lors de la lecture du fichier: {str(e)}")
-
-    else:
-        st.info("👉 Veuillez importer un fichier Excel contenant une feuille 'Heats' et saisir la liste des juges.")
-
-
-if __name__ == "__main__":
-    main()
+            st.error(f"❌ Erreur: {str(e)}")
