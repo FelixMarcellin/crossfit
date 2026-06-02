@@ -338,8 +338,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
             )
         })
 
-    ON = rotation_config["on"]
-    OFF = rotation_config["off"]
+
 
     # ====================================================
     # Etat des juges
@@ -347,8 +346,9 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
     state = {
         j: {
-            "phase": "AVAILABLE",     # AVAILABLE / ON / OFF
+            "phase": "AVAILABLE",
             "remaining": 0,
+            "off_value": 0,
             "lane": None,
             "count": 0
         }
@@ -364,6 +364,14 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     for heat_idx, heat in enumerate(heats):
 
         wod = heat["wod"]
+
+        rotation = rotation_config.get(
+            wod,
+            {"on": 3, "off": 3}
+        )
+        
+        ON = rotation["on"]
+        OFF = rotation["off"]
 
         dispo = disponibilites.get(wod)
 
@@ -466,6 +474,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
                 s["phase"] = "ON"
                 s["remaining"] = ON
+                s["off_value"] = OFF
                 s["lane"] = lane
 
         # ====================================================
@@ -515,7 +524,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                     if s["remaining"] <= 0:
 
                         s["phase"] = "OFF"
-                        s["remaining"] = OFF
+                        s["remaining"] = s["off_value"]
                         s["lane"] = None
 
             else:
@@ -567,18 +576,7 @@ def main():
             judges_text = st.text_area("Saisir les juges (un par ligne)", "Juge 1\nJuge 2\nJuge 3")
             judges = [clean_text(j.strip()) for j in judges_text.split('\n') if j.strip()]
 
-        st.header("⚙️ Configuration du roulement")
-        rotation_system = st.selectbox(
-            "Système de roulement",
-            options=[
-                {"name": "1-on/1-off", "on": 1, "off": 1},
-                {"name": "2-on/2-off", "on": 2, "off": 2},
-                {"name": "3-on/3-off", "on": 3, "off": 3},
-                {"name": "2-on/1-off", "on": 2, "off": 1},
-                {"name": "3-on/2-off", "on": 3, "off": 2}
-            ],
-            format_func=lambda x: x["name"]
-        )
+    
         
         st.info(f"🔄 Système sélectionné : {rotation_system['name']}")
         st.header("🖼️ Logo (pied de page)")
@@ -605,7 +603,30 @@ def main():
                 st.stop()
             
             wods = sorted(schedule['Workout'].dropna().unique())
+
+            rotation_by_wod = {}
+
+            st.header("⚙️ Roulement par WOD")
             
+            rotation_options = [
+                {"name": "1-on/1-off", "on": 1, "off": 1},
+                {"name": "2-on/1-off", "on": 2, "off": 1},
+                {"name": "2-on/2-off", "on": 2, "off": 2},
+                {"name": "3-on/2-off", "on": 3, "off": 2},
+                {"name": "3-on/3-off", "on": 3, "off": 3},
+                {"name": "4-on/2-off", "on": 4, "off": 2}
+            ]
+            
+            for wod in wods:
+            
+                rotation_by_wod[wod] = st.selectbox(
+                    f"Roulement {wod}",
+                    rotation_options,
+                    index=4,
+                    format_func=lambda x: x["name"],
+                    key=f"rotation_{wod}"
+                )
+                        
             st.header("📅 Disponibilités des juges")
             disponibilites = {}
             cols = st.columns(3)
@@ -619,7 +640,7 @@ def main():
                             disponibilites[wod] = st.multiselect("Juges disponibles", judges, key=f"multi_{wod}")
 
             if st.button("🦄 Générer le planning"):
-                planning = assign_judges_equitable(schedule, judges, disponibilites, rotation_system)
+                planning = assign_judges_equitable(schedule,judges,disponibilites,rotation_by_wod)
 
                 st.subheader("📊 Équilibre des assignations")
                 counts = {j: len(planning[j]) for j in judges}
