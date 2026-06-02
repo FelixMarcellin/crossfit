@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Planning Juges équilibré - Crossfit Amiens
-Version 10.3 : Attribution par Blocs Continus et Fixation Absolue des Lignes
+Version 10.4 : Verrou Temporel Glissant Absolu (Lanes fixes & Blocs stricts)
 """
 
 import streamlit as st
@@ -218,18 +218,20 @@ def extract_heat_number(heat_str):
 
 
 # ====================================================
-# ATTRIBUTION ULTRA-STRICTE PAR BLOC CONTINU DE HEATS
+# ATTRIBUTION DE JUGE PAR VERROU TEMPOREL CONTINU (LANE FIXE)
 # ====================================================
 def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     planning = {j: [] for j in judges}
     judge_counts = {j: 0 for j in judges}
-    judge_last_busy = {j: -100 for j in judges}  # Stocke le dernier index de heat travaillé pour gérer le repos mini
+    
+    # Historique précis : stocke les index globaux des heats travaillés pour forcer le repos
+    judge_history = {j: set() for j in judges} 
 
     df = schedule.copy()
     df["heat_num"] = df["Heat #"].apply(extract_heat_number)
     df = df.sort_values(["Heat Start Time", "heat_num", "Lane"]).reset_index(drop=True)
 
-    # Récupération de la liste chronologique ordonnée de tous les Heats uniques
+    # Reconstruction chronologique linéaire de la compétition
     grouped_heats = df.groupby(["Workout", "heat_num", "Heat Start Time", "Heat End Time"], sort=False)
     heats_list = []
     for (wod, heat_num, start, end), g in grouped_heats:
@@ -242,70 +244,96 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
         })
 
     total_heats = len(heats_list)
-    heat_idx = 0
 
-    while heat_idx < total_heats:
-        current_heat = heats_list[heat_idx]
+    # Table d'attribution finale temporaire : heat_idx -> lane_str -> juge
+    assignments = {h_idx: {} for h_idx in range(total_heats)}
+
+    for h_idx in range(total_heats):
+        current_heat = heats_list[h_idx]
         wod = current_heat["wod"]
         
-        # Configuration du roulement demandé pour ce WOD
         config = rotation_config.get(wod, {"on": 3, "off": 3})
         on_duration = config["on"]
         off_duration = config["off"]
 
-        # Déterminer la longueur réelle du bloc qu'on va verrouiller (ne peut pas dépasser la fin des heats)
-        actual_on = min(on_duration, total_heats - heat_idx)
-        
-        # Trouver toutes les Lanes physiques nécessaires durant toute la durée de ce bloc d'affilée
-        lanes_to_fill = set()
-        for offset in range(actual_on):
-            h = heats_list[heat_idx + offset]
-            for r in h["rows"]:
-                lanes_to_fill.add(str(int(float(r["Lane"]))))
-        lanes_to_fill = sorted(list(lanes_to_fill), key=int)
+        required_lanes = [str(int(float(r["Lane"]))) for r in current_heat["rows"]]
 
-        # Pour chaque Lane requise dans ce bloc, on va élire UN SEUL JUGE FIXE
-        for lane in lanes_to_fill:
-            # Filtrer les juges éligibles (disponibles sur le WOD + ayant fini leur repos forcé)
+        for lane in required_lanes:
+            # Si la ligne a déjà été verrouillée par un juge au heat précédent, on passe
+            if lane in assignments[h_idx]:
+                continue
+
+            # Trouver les juges éligibles pour démarrer un bloc de "ON" heats consécutifs sur cette Lane
             eligible_judges = []
             for j in judges:
                 j_dispo = disponibilites.get(wod, judges)
-                # Vérifie si le juge est dispo et s'il a respecté son temps de repos réglementaire 'off'
-                if j in j_dispo and (heat_idx >= judge_last_busy[j] + off_duration + 1):
+                if j not in j_dispo:
+                    continue
+                
+                # Le juge ne doit pas être déjà occupé sur une AUTRE ligne à ce heat précis
+                if j in assignments[h_idx].values():
+                    continue
+
+                # RÈGLE DU REPOS STRICT : Vérifier qu'il n'a pas travaillé lors des 'off_duration' derniers heats
+                has_rested = True
+                for check_idx in range(max(0, h_idx - off_duration), h_idx):
+                    if check_idx in judge_history[j]:
+                        has_rested = False
+                        break
+                
+                if has_rested:
                     eligible_judges.append(j)
 
-            # Si pénurie totale, on élargit à tous les juges disponibles sur ce WOD
+            # Si sécurité critique vide, on élargit le spectre
             if not eligible_judges:
-                eligible_judges = [j for j in judges if j in disponibilites.get(wod, judges)]
+                eligible_judges = [j for j in judges if j in disponibilites.get(wod, judges) and j not in assignments[h_idx].values()]
 
-            # Tri par équité absolue : celui qui a le moins travaillé commence le bloc
+            if not eligible_judges:
+                continue # Cas extrême de pénurie
+
+            # Tri par équité : on prend le juge disponible qui a le plus petit compteur de heats arbitrés
             eligible_judges = sorted(eligible_judges, key=lambda j: judge_counts[j])
             chosen_judge = eligible_judges[0]
 
-            # Assigner ce juge à cette LANE spécifique pour toute la durée du bloc
-            for offset in range(actual_on):
-                h_target = heats_list[heat_idx + offset]
-                # Trouver si la ligne existe dans ce heat précis (parfois un heat a moins d'athlètes)
-                row_data = next((r for r in h_target["rows"] if str(int(float(r["Lane"]))) == lane), None)
-                
-                if row_data:
-                    planning[chosen_judge].append({
-                        "wod": clean_text(str(row_data["Workout"])),
-                        "lane": lane,
-                        "athlete": clean_text(str(row_data["Competitor"])),
-                        "division": clean_text(str(row_data["Division"])),
-                        "start": clean_text(str(row_data["Heat Start Time"])),
-                        "end": clean_text(str(row_data["Heat End Time"])),
-                        "heat": clean_text(str(row_data["Heat #"])),
-                        "heat_num": h_target["heat_num"]
-                    })
-                    judge_counts[chosen_judge] += 1
-                
-                # Enregistre le fait que le juge était actif/réservé durant ce heat index
-                judge_last_busy[chosen_judge] = heat_idx + offset
+            # VERROUILLAGE DU JUGE : On l'applique sur cette LANE pour les 'on_duration' prochains heats continus
+            current_on_count = 0
+            for future_idx in range(h_idx, total_heats):
+                if current_on_count >= on_duration:
+                    break
 
-        # On avance l'index global du nombre de heats verrouillés dans ce bloc
-        heat_idx += actual_on
+                future_heat = heats_list[future_idx]
+                future_lanes = [str(int(float(r["Lane"]))) for r in future_heat["rows"]]
+
+                # S'il change de WOD, on casse le bloc pour éviter les incohérences de planning
+                if future_heat["wod"] != wod:
+                    break
+
+                # Si la ligne existe dans ce heat futur et que le juge n'est pas réquisitionné ailleurs
+                if lane in future_lanes and chosen_judge not in assignments[future_idx].values():
+                    assignments[future_idx][lane] = chosen_judge
+                    judge_history[chosen_judge].add(future_idx)
+                    current_on_count += 1
+                else:
+                    # Si la ligne disparaît temporairement, on stoppe le bloc proprement
+                    break
+
+    # Remplissage final du dictionnaire de planning destiné à la génération PDF
+    for h_idx, lanes_dict in assignments.items():
+        h_data = heats_list[h_idx]
+        for lane_id, j_name in lanes_dict.items():
+            row_data = next((r for r in h_data["rows"] if str(int(float(r["Lane"]))) == lane_id), None)
+            if row_data:
+                planning[j_name].append({
+                    "wod": clean_text(str(row_data["Workout"])),
+                    "lane": lane_id,
+                    "athlete": clean_text(str(row_data["Competitor"])),
+                    "division": clean_text(str(row_data["Division"])),
+                    "start": clean_text(str(row_data["Heat Start Time"])),
+                    "end": clean_text(str(row_data["Heat End Time"])),
+                    "heat": clean_text(str(row_data["Heat #"])),
+                    "heat_num": h_data["heat_num"]
+                })
+                judge_counts[j_name] += 1
 
     return planning
 
@@ -331,7 +359,7 @@ def main():
                 st.error(f"Erreur CSV : {e}")
                 judges = []
         else:
-            judges_text = st.text_area("Saisir les juges (un par ligne)", "Orleane\nDamien\nElodie\nMorgane\nMelanie\nPierre\nClement\nJonathan R\nClea\nBenjamin\nMarie\nDavid\nGregory")
+            judges_text = st.text_area("Saisir les juges (un par ligne)", "Orleane\nDamien\nElodie\nMorgane\nMelanie\nPierre\nClement\nJonathan R\nClea\nBenjamin\nMarie\nDavid\nGregory\nJonathan DO")
             judges = [clean_text(j.strip()) for j in judges_text.split('\n') if j.strip()]
 
         st.header("🖼️ Logo (pied de page)")
@@ -353,7 +381,7 @@ def main():
             rotation_by_wod = {}
 
             st.header("⚙️ Roulement par WOD")
-            st.info("Sélectionnez le nombre de Heats consécutifs (ON) avant la pause obligatoire (OFF).")
+            st.info("Configuration demandée par l'organisateur.")
             
             rotation_options = [
                 {"name": "1-on / 1-off", "on": 1, "off": 1},
@@ -368,7 +396,7 @@ def main():
                 rotation_by_wod[wod] = st.selectbox(
                     f"Roulement {wod}",
                     rotation_options,
-                    index=4,
+                    index=4, # 3-on / 3-off par défaut
                     format_func=lambda x: x["name"],
                     key=f"rotation_{wod}"
                 )
@@ -385,7 +413,7 @@ def main():
                         else:
                             disponibilites[wod] = st.multiselect("Juges disponibles", judges, default=judges, key=f"multi_{wod}")
 
-            if st.button("🦄 Générer le planning parfait"):
+            if st.button("🦄 Générer le planning strict"):
                 planning = assign_judges_equitable(schedule, judges, disponibilites, rotation_by_wod)
 
                 st.subheader("📊 Équilibre final des assignations")
@@ -401,16 +429,16 @@ def main():
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t1:
                         pdf_juges.output(t1.name)
                         with open(t1.name, "rb") as f:
-                            st.download_button("📘 Télécharger planning par juge", f, "planning_juges_corrigé.pdf")
+                            st.download_button("📘 Télécharger planning par juge", f, "planning_juges_strict.pdf")
                         os.unlink(t1.name)
                     
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t2:
                         pdf_heats.output(t2.name)
                         with open(t2.name, "rb") as f:
-                            st.download_button("📗 Télécharger planning par heat", f, "planning_heats_corrigé.pdf")
+                            st.download_button("📗 Télécharger planning par heat", f, "planning_heats_strict.pdf")
                         os.unlink(t2.name)
                     
-                    st.success("✅ Nouveau planning généré sans sauts de lignes ni heats isolés !")
+                    st.success("✅ Planning strict généré sans aucun saut de ligne ni coupure isolée !")
                 except Exception as e:
                     st.error(f"❌ Erreur PDF : {str(e)}")
 
