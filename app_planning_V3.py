@@ -432,98 +432,295 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     return planning
 # ========================
 # MAIN STREAMLIT
-# ========================
+
 def main():
+
     with st.sidebar:
+
         st.header("📂 Fichier d'entrée")
-        schedule_file = st.file_uploader("Planning (Excel)", type=["xlsx"])
-        competition_name = st.text_input("Nom de la compétition", "Unicorn Throwdown")
 
-        st.header("🙅‍♂️ Juges")
-        judges_file = st.file_uploader("Liste des juges (CSV)", type=["csv"])
-        if judges_file:
-            try:
-                judges_df = pd.read_csv(judges_file, header=None, encoding='latin1')
-                judges = [clean_text(str(j)) for j in judges_df[0].dropna().tolist()]
-            except:
-                judges = []
-        else:
-            judges_text = st.text_area("Saisir les juges (un par ligne)", "Juge 1\nJuge 2\nJuge 3")
-            judges = [clean_text(j.strip()) for j in judges_text.split('\n') if j.strip()]
-
-        st.header("⚙️ Configuration du roulement")
-        rotation_system = st.selectbox(
-            "Système de roulement",
-            options=[
-                {"name": "3-on / 3-off (Recommandé)", "on": 3, "off": 3},
-                {"name": "2-on / 2-off", "on": 2, "off": 2},
-                {"name": "1-on / 1-off", "on": 1, "off": 1},
-                {"name": "2-on / 1-off", "on": 2, "off": 1}
-            ],
-            format_func=lambda x: x["name"]
+        schedule_file = st.file_uploader(
+            "Planning (Excel)",
+            type=["xlsx"]
         )
-        logo_file = st.file_uploader("Uploader un logo", type=["png", "jpg", "jpeg"])
-        logo_path = None
-        if logo_file:
-            temp_logo = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-            temp_logo.write(logo_file.read())
-            temp_logo.close()
-            logo_path = temp_logo.name
 
-    if schedule_file and judges:
-        schedule = load_schedule_from_excel(schedule_file)
-        if schedule is None or schedule.empty: st.stop()
-        
-        wods = sorted(schedule['Workout'].dropna().unique())
-        st.header("📅 Disponibilités des juges")
-        disponibilites = {}
-        cols = st.columns(3)
-        for i, wod in enumerate(wods):
-            with cols[i % 3]:
-                with st.expander(f"{wod}"):
-                    select_all = st.checkbox(f"Tout sélectionner ({wod})", key=f"sel_{wod}", value=True)
-                    if select_all:
-                        disponibilites[wod] = judges
-                    else:
-                        disponibilites[wod] = st.multiselect("Juges disponibles", judges, key=f"multi_{wod}")
+        competition_name = st.text_input(
+            "Nom de la compétition",
+            "Unicorn Throwdown"
+        )
 
-        if st.button("🦄 Générer le planning"):
-            planning = assign_judges_equitable(
-                    schedule,
-                    judges,
-                    disponibilites,
-                    rotation_by_wod
+        st.header("👨‍⚖️ Juges")
+
+        judges_file = st.file_uploader(
+            "Liste des juges (CSV)",
+            type=["csv"]
+        )
+
+        if judges_file:
+
+            try:
+
+                judges_df = pd.read_csv(
+                    judges_file,
+                    header=None,
+                    encoding="latin1"
                 )
 
-            if warnings:
-                st.warning("🚨 **Alertes effectifs :**")
-                for w in warnings: st.write(w)
+                judges = [
+                    clean_text(str(j))
+                    for j in judges_df[0].dropna().tolist()
+                ]
 
-            st.subheader("📊 Équilibre des assignations (Nombre total de Heats)")
-            counts = {j: len(planning[j]) for j in judges}
-            for j in sorted(counts, key=counts.get, reverse=True):
-                st.write(f"✅ {j}: {counts[j]} Heats arbitrés au total")
-
-            try:
-                pdf_juges = generate_pdf_tableau(planning, competition_name, logo_path)
-                pdf_heats = generate_heat_pdf(planning, competition_name, logo_path)
-                
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t1:
-                    pdf_juges.output(t1.name)
-                    with open(t1.name, "rb") as f:
-                        st.download_button("📘 Télécharger planning par juge", f, "planning_juges.pdf")
-                    os.unlink(t1.name)
-                
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t2:
-                    pdf_heats.output(t2.name)
-                    with open(t2.name, "rb") as f:
-                        st.download_button("📗 Télécharger planning par heat", f, "planning_heats.pdf")
-                    os.unlink(t2.name)
-                st.success("✅ Planning généré en respectant le roulement et la conservation des lignes !")
             except Exception as e:
-                st.error(f"❌ Erreur PDF: {str(e)}")
-    else:
-        st.info("👉 Veuillez importer le fichier Excel et spécifier les juges dans la barre latérale.")
+
+                st.error(f"Erreur lecture CSV : {e}")
+                judges = []
+
+        else:
+
+            judges_text = st.text_area(
+                "Saisir les juges (un par ligne)",
+                "Juge 1\nJuge 2\nJuge 3"
+            )
+
+            judges = [
+                clean_text(j.strip())
+                for j in judges_text.split("\n")
+                if j.strip()
+            ]
+
+        st.header("🖼️ Logo")
+
+        logo_file = st.file_uploader(
+            "Uploader un logo",
+            type=["png", "jpg", "jpeg"]
+        )
+
+        logo_path = None
+
+        if logo_file:
+
+            temp_logo = tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".png"
+            )
+
+            temp_logo.write(logo_file.read())
+            temp_logo.close()
+
+            logo_path = temp_logo.name
+
+    # ==================================================
+    # Lecture planning
+    # ==================================================
+
+    if not schedule_file or not judges:
+
+        st.info(
+            "👉 Veuillez importer le fichier Excel et renseigner les juges."
+        )
+        return
+
+    schedule = load_schedule_from_excel(schedule_file)
+
+    if schedule is None:
+        return
+
+    if schedule.empty:
+        st.error("❌ Aucun heat trouvé")
+        return
+
+    # ==================================================
+    # Liste WODs
+    # ==================================================
+
+    wods = sorted(
+        schedule["Workout"]
+        .dropna()
+        .astype(str)
+        .unique()
+    )
+
+    # ==================================================
+    # Roulement par WOD
+    # ==================================================
+
+    st.header("⚙️ Roulement par WOD")
+
+    rotation_options = [
+        {"name": "1-on / 1-off", "on": 1, "off": 1},
+        {"name": "2-on / 1-off", "on": 2, "off": 1},
+        {"name": "2-on / 2-off", "on": 2, "off": 2},
+        {"name": "3-on / 2-off", "on": 3, "off": 2},
+        {"name": "3-on / 3-off", "on": 3, "off": 3},
+        {"name": "4-on / 2-off", "on": 4, "off": 2},
+    ]
+
+    rotation_by_wod = {}
+
+    cols = st.columns(3)
+
+    for i, wod in enumerate(wods):
+
+        with cols[i % 3]:
+
+            rotation_by_wod[wod] = st.selectbox(
+                f"Roulement {wod}",
+                rotation_options,
+                index=4,
+                format_func=lambda x: x["name"],
+                key=f"rotation_{wod}"
+            )
+
+    # ==================================================
+    # Disponibilités
+    # ==================================================
+
+    st.header("📅 Disponibilités des juges")
+
+    disponibilites = {}
+
+    cols = st.columns(3)
+
+    for i, wod in enumerate(wods):
+
+        with cols[i % 3]:
+
+            with st.expander(wod):
+
+                all_selected = st.checkbox(
+                    f"Tous disponibles ({wod})",
+                    value=True,
+                    key=f"all_{wod}"
+                )
+
+                if all_selected:
+
+                    disponibilites[wod] = judges
+
+                else:
+
+                    disponibilites[wod] = st.multiselect(
+                        "Juges disponibles",
+                        judges,
+                        key=f"multi_{wod}"
+                    )
+
+    # ==================================================
+    # Génération
+    # ==================================================
+
+    if st.button("🦄 Générer le planning"):
+
+        try:
+
+            planning = assign_judges_equitable(
+                schedule,
+                judges,
+                disponibilites,
+                rotation_by_wod
+            )
+
+            st.success("✅ Planning généré")
+
+            # ======================================
+            # Stats
+            # ======================================
+
+            st.header("📊 Répartition")
+
+            counts = {
+                j: len(planning[j])
+                for j in judges
+            }
+
+            total_assignments = sum(counts.values())
+
+            moyenne = (
+                round(
+                    total_assignments / len(judges),
+                    1
+                )
+                if judges else 0
+            )
+
+            st.info(
+                f"Total heats arbitrés : {total_assignments} | "
+                f"Moyenne par juge : {moyenne}"
+            )
+
+            stats_df = pd.DataFrame({
+                "Juge": list(counts.keys()),
+                "Heats": list(counts.values())
+            })
+
+            stats_df = stats_df.sort_values(
+                "Heats",
+                ascending=False
+            )
+
+            st.dataframe(
+                stats_df,
+                use_container_width=True
+            )
+
+            # ======================================
+            # PDF JUGES
+            # ======================================
+
+            pdf_juges = generate_pdf_tableau(
+                planning,
+                competition_name,
+                logo_path
+            )
+
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".pdf"
+            ) as tmp:
+
+                pdf_juges.output(tmp.name)
+
+                with open(tmp.name, "rb") as f:
+
+                    st.download_button(
+                        "📘 Télécharger planning par juge",
+                        f.read(),
+                        "planning_juges.pdf",
+                        mime="application/pdf"
+                    )
+
+            # ======================================
+            # PDF HEATS
+            # ======================================
+
+            pdf_heats = generate_heat_pdf(
+                planning,
+                competition_name,
+                logo_path
+            )
+
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".pdf"
+            ) as tmp:
+
+                pdf_heats.output(tmp.name)
+
+                with open(tmp.name, "rb") as f:
+
+                    st.download_button(
+                        "📗 Télécharger planning par heat",
+                        f.read(),
+                        "planning_heats.pdf",
+                        mime="application/pdf"
+                    )
+
+        except Exception as e:
+
+            st.error(
+                f"❌ Erreur génération planning : {str(e)}"
+            )
 
 
 if __name__ == "__main__":
