@@ -272,18 +272,18 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
     }
 
     # =====================================================
-    # Etat des lanes
+    # Lane -> juge actif
     # =====================================================
 
-    lane_state = {}
+    lane_assignment = {}
 
     # =====================================================
-    # Parcours des heats
+    # Traitement heat par heat
     # =====================================================
 
     for heat in heats:
 
-        wod = heat["wod"]
+        wod = str(heat["wod"]).strip()
 
         rotation = rotation_config.get(
             wod,
@@ -293,35 +293,37 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
         ON = rotation["on"]
         OFF = rotation["off"]
 
-        dispo = disponibilites.get(wod)
-
-        if not dispo:
-            dispo = judges
+        dispo = disponibilites.get(wod, judges)
 
         lanes_presentes = sorted(
-            {str(int(float(r["Lane"]))) for r in heat["rows"]},
+            {
+                str(int(float(r["Lane"])))
+                for r in heat["rows"]
+            },
             key=int
         )
 
         # =====================================================
-        # Attribution des lanes libres
+        # Libération des lanes dont le juge est OFF
+        # =====================================================
+
+        lanes_to_remove = []
+
+        for lane, judge in lane_assignment.items():
+
+            if state[judge]["phase"] != "ON":
+                lanes_to_remove.append(lane)
+
+        for lane in lanes_to_remove:
+            del lane_assignment[lane]
+
+        # =====================================================
+        # Attribution uniquement des lanes libres
         # =====================================================
 
         for lane in lanes_presentes:
 
-            need_new_judge = False
-
-            if lane not in lane_state:
-                need_new_judge = True
-
-            else:
-
-                judge = lane_state[lane]
-
-                if state[judge]["phase"] != "ON":
-                    need_new_judge = True
-
-            if not need_new_judge:
+            if lane in lane_assignment:
                 continue
 
             candidates = []
@@ -331,16 +333,13 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 if j not in dispo:
                     continue
 
-                if state[j]["phase"] == "OFF":
-                    continue
-
-                if j in lane_state.values():
+                if state[j]["phase"] != "AVAILABLE":
                     continue
 
                 candidates.append(j)
 
-            # tolérance si manque de juges
-            if not candidates:
+            # secours si manque de juges
+            if len(candidates) == 0:
 
                 for j in judges:
 
@@ -353,7 +352,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                     ):
                         candidates.append(j)
 
-            if not candidates:
+            if len(candidates) == 0:
                 continue
 
             candidates = sorted(
@@ -366,7 +365,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
             selected = candidates[0]
 
-            lane_state[lane] = selected
+            lane_assignment[lane] = selected
 
             state[selected]["phase"] = "ON"
             state[selected]["remaining"] = ON
@@ -382,7 +381,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
 
             lane = str(int(float(row["Lane"])))
 
-            judge = lane_state.get(lane)
+            judge = lane_assignment.get(lane)
 
             if judge is None:
                 continue
@@ -398,12 +397,12 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 "heat_num": heat["heat_num"]
             })
 
-            state[judge]["count"] += 1
-
             worked_this_heat.add(judge)
 
+            state[judge]["count"] += 1
+
         # =====================================================
-        # Mise à jour ON / OFF
+        # Mise à jour des compteurs
         # =====================================================
 
         for judge in judges:
@@ -421,35 +420,16 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                         s["phase"] = "OFF"
                         s["remaining"] = s["off_value"]
 
-            else:
+            elif s["phase"] == "OFF":
 
-                if s["phase"] == "OFF":
+                s["remaining"] -= 1
 
-                    s["remaining"] -= 1
+                if s["remaining"] <= 0:
 
-                    if s["remaining"] <= 0:
-
-                        s["phase"] = "AVAILABLE"
-                        s["remaining"] = 0
-
-        # =====================================================
-        # Libération des lanes
-        # =====================================================
-
-        lanes_to_remove = []
-
-        for lane, judge in lane_state.items():
-
-            if state[judge]["phase"] != "ON":
-
-                lanes_to_remove.append(lane)
-
-        for lane in lanes_to_remove:
-
-            del lane_state[lane]
+                    s["phase"] = "AVAILABLE"
+                    s["remaining"] = 0
 
     return planning
-
 # ========================
 # MAIN STREAMLIT
 # ========================
@@ -508,7 +488,12 @@ def main():
                         disponibilites[wod] = st.multiselect("Juges disponibles", judges, key=f"multi_{wod}")
 
         if st.button("🦄 Générer le planning"):
-            planning, warnings = assign_judges_equitable(schedule, judges, disponibilites, rotation_system)
+            planning = assign_judges_equitable(
+                    schedule,
+                    judges,
+                    disponibilites,
+                    rotation_by_wod
+                )
 
             if warnings:
                 st.warning("🚨 **Alertes effectifs :**")
