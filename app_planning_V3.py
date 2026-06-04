@@ -258,7 +258,7 @@ def assign_judges_equitable(
             "remaining": 0,
             "count": 0,
             "lane": None,
-            "consecutive_heats": 0  # Nouveau : compteur de heats consécutifs
+            "consecutive_heats": 0
         }
 
     lane_assignment = {}
@@ -272,6 +272,9 @@ def assign_judges_equitable(
         
         lanes_presentes = sorted({str(int(float(r["Lane"]))) for r in heat["rows"]}, key=int)
 
+        # 🔴 NOUVEAU : Ensemble des juges déjà utilisés dans CE heat
+        judges_used_this_heat = set()
+
         # Libération des lanes des juges OFF
         lanes_to_remove = []
         for lane, judge in lane_assignment.items():
@@ -281,36 +284,69 @@ def assign_judges_equitable(
             lane_assignment.pop(lane, None)
 
         # ==========================================
-        # Remplissage des lanes vides (AMÉLIORÉ)
+        # Remplissage des lanes vides (CORRIGÉ)
         # ==========================================
         for lane in lanes_presentes:
             if lane in lane_assignment:
-                continue
+                judge = lane_assignment[lane]
+                # Vérification critique : ce juge est-il déjà utilisé dans ce heat ?
+                if judge in judges_used_this_heat:
+                    # Problème ! Un juge ne peut pas être sur 2 lanes à la fois
+                    lane_assignment.pop(lane, None)
+                else:
+                    judges_used_this_heat.add(judge)
+                    continue
 
-            # Niveau 1 : Juges AVAILABLE
-            candidates = [j for j in judges if j in dispo and state[j]["phase"] == "AVAILABLE"]
+            # ======================================
+            # Recherche d'un nouveau juge pour cette lane
+            # ======================================
+            
+            # Niveau 1 : Juges AVAILABLE et pas déjà utilisés dans ce heat
+            candidates = [
+                j for j in judges 
+                if j in dispo 
+                and state[j]["phase"] == "AVAILABLE"
+                and j not in judges_used_this_heat
+            ]
             
             # Niveau 2 : Juges qui finissent leur OFF dans 1 heat
             if not candidates:
-                candidates = [j for j in judges if j in dispo and state[j]["phase"] == "OFF" and state[j]["remaining"] <= 1]
+                candidates = [
+                    j for j in judges 
+                    if j in dispo 
+                    and state[j]["phase"] == "OFF" 
+                    and state[j]["remaining"] <= 1
+                    and j not in judges_used_this_heat
+                ]
             
-            # Niveau 3 : Juges en OFF mais qui ont déjà fait moins de heats que la moyenne (secours forcé)
+            # Niveau 3 : Juges en OFF mais en dessous de la moyenne
             if not candidates:
                 avg_heats = sum(state[j]["count"] for j in judges) / len(judges) if judges else 0
-                candidates = [j for j in judges if j in dispo and state[j]["phase"] == "OFF" and state[j]["count"] <= avg_heats + 1]
+                candidates = [
+                    j for j in judges 
+                    if j in dispo 
+                    and state[j]["phase"] == "OFF" 
+                    and state[j]["count"] <= avg_heats + 1
+                    and j not in judges_used_this_heat
+                ]
             
-            # Niveau 4 : DERNIER RECOURS - n'importe quel juge disponible même en plein OFF
+            # Niveau 4 : DERNIER RECOURS - n'importe quel juge dispo
             if not candidates:
-                candidates = [j for j in judges if j in dispo]
-                # Si toujours rien, on prend n'importe quel juge
+                candidates = [
+                    j for j in judges 
+                    if j in dispo 
+                    and j not in judges_used_this_heat
+                ]
+                # Si toujours rien, on prend n'importe quel juge (même déjà utilisé - CAS EXTRÊME)
                 if not candidates:
-                    candidates = judges[:]
+                    candidates = [j for j in judges if j not in judges_used_this_heat]
             
             # Tri par charge de travail et ordre initial
             candidates = sorted(candidates, key=lambda x: (state[x]["count"], judge_order[x]))
             selected = candidates[0]
 
             lane_assignment[lane] = selected
+            judges_used_this_heat.add(selected)  # 🔴 CRUCIAL : marquer comme utilisé
             state[selected]["phase"] = "ON"
             state[selected]["remaining"] = ON
             state[selected]["lane"] = lane
@@ -325,11 +361,15 @@ def assign_judges_equitable(
             lane = str(int(float(row["Lane"])))
             judge = lane_assignment.get(lane)
             
-            # Si on a toujours pas de juge (cas extrême), on force l'attribution
+            # Si on a toujours pas de juge (cas extrême)
             if judge is None:
-                # Prendre le juge qui a le moins de heats
-                judge = min([j for j in judges if j in dispo], key=lambda x: state[x]["count"])
+                # Prendre le juge le moins sollicité et pas déjà utilisé
+                available_judges = [j for j in judges if j in dispo and j not in judges_used_this_heat]
+                if not available_judges:
+                    available_judges = [j for j in judges if j not in judges_used_this_heat]
+                judge = min(available_judges, key=lambda x: state[x]["count"])
                 lane_assignment[lane] = judge
+                judges_used_this_heat.add(judge)
                 state[judge]["phase"] = "ON"
                 state[judge]["remaining"] = ON
                 state[judge]["lane"] = lane
@@ -350,14 +390,13 @@ def assign_judges_equitable(
             state[judge]["consecutive_heats"] += 1
 
         # ==========================================
-        # Mise à jour ON / OFF (avec vérification des heats consécutifs)
+        # Mise à jour ON / OFF
         # ==========================================
         for judge in judges:
             if judge in worked_this_heat:
                 if state[judge]["phase"] == "ON":
                     state[judge]["remaining"] -= 1
                     
-                    # Vérification supplémentaire : ne pas dépasser ON+1 heats consécutifs
                     if state[judge]["remaining"] <= 0 or state[judge]["consecutive_heats"] >= ON:
                         state[judge]["phase"] = "OFF"
                         state[judge]["remaining"] = OFF
@@ -369,11 +408,6 @@ def assign_judges_equitable(
                     if state[judge]["remaining"] <= 0:
                         state[judge]["phase"] = "AVAILABLE"
                         state[judge]["remaining"] = 0
-
-    # Vérification finale : s'assurer qu'aucun juge n'a de lane résiduelle
-    for lane, judge in lane_assignment.items():
-        if judge and lane:
-            pass  # Tout est OK
 
     return planning
 # ========================
