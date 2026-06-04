@@ -234,13 +234,9 @@ def assign_judges_equitable(
     ON = rotation_system["on"]
     OFF = rotation_system["off"]
 
-    judge_order = {
-        j: i
-        for i, j in enumerate(judges)
-    }
+    judge_order = {j: i for i, j in enumerate(judges)}
 
     df = schedule.copy()
-
     df["heat_num"] = df["Heat #"].apply(extract_heat_number)
 
     df = df.sort_values(
@@ -264,36 +260,27 @@ def assign_judges_equitable(
             )
         })
 
-    # ==================================================
-    # Etat juges
-    # ==================================================
-
-    state = {}
-
-    for j in judges:
-
-        state[j] = {
+    # ---------------------------
+    # STATE
+    # ---------------------------
+    state = {
+        j: {
             "phase": "AVAILABLE",
             "remaining": 0,
-            "count": 0,
-            "lane": None
+            "count": 0
         }
+        for j in judges
+    }
 
-    # lane -> juge
     lane_assignment = {}
 
-    # ==================================================
-    # Boucle heats
-    # ==================================================
-
+    # ===========================
+    # MAIN LOOP
+    # ===========================
     for heat in heats:
 
         wod = heat["wod"]
-
-        dispo = disponibilites.get(
-            wod,
-            judges
-        )
+        dispo = disponibilites.get(wod, judges)
 
         lanes_presentes = sorted(
             {
@@ -303,91 +290,67 @@ def assign_judges_equitable(
             key=int
         )
 
-        # ==========================================
-        # Libération des lanes des juges OFF
-        # ==========================================
+        # ---------------------------
+        # Reset lanes invalides
+        # ---------------------------
+        lane_assignment = {
+            lane: j
+            for lane, j in lane_assignment.items()
+            if state[j]["phase"] == "ON"
+        }
 
-        lanes_to_remove = []
-
-        for lane, judge in lane_assignment.items():
-
-            if state[judge]["phase"] != "ON":
-                lanes_to_remove.append(lane)
-
-        for lane in lanes_to_remove:
-
-            lane_assignment.pop(lane, None)
-
-        # ==========================================
-        # Remplissage des lanes vides
-        # ==========================================
-
+        # ---------------------------
+        # ASSIGNATION LANE PAR LANE
+        # ---------------------------
         for lane in lanes_presentes:
 
             if lane in lane_assignment:
                 continue
 
-            candidates = []
+            # 1) candidats disponibles
+            candidates = [
+                j for j in judges
+                if j in dispo
+            ]
 
-            for j in judges:
+            # 2) priorité : AVAILABLE
+            available = [
+                j for j in candidates
+                if state[j]["phase"] == "AVAILABLE"
+            ]
 
-                if j not in dispo:
-                    continue
+            pool = available if available else candidates
 
-                if state[j]["phase"] == "AVAILABLE":
+            # 3) fallback ABSOLU (jamais vide)
+            if not pool:
+                pool = judges[:]  # last resort global
 
-                    candidates.append(j)
-
-            # secours :
-            # autoriser un juge qui termine son OFF
-            if not candidates:
-
-                for j in judges:
-
-                    if j not in dispo:
-                        continue
-
-                    if (
-                        state[j]["phase"] == "OFF"
-                        and state[j]["remaining"] <= 1
-                    ):
-                        candidates.append(j)
-
-            if not candidates:
-                continue
-
-            candidates = sorted(
-                candidates,
+            # 4) choix équilibré
+            selected = sorted(
+                pool,
                 key=lambda x: (
                     state[x]["count"],
                     judge_order[x]
                 )
-            )
-
-            selected = candidates[0]
+            )[0]
 
             lane_assignment[lane] = selected
 
             state[selected]["phase"] = "ON"
             state[selected]["remaining"] = ON
-            state[selected]["lane"] = lane
 
-        # ==========================================
-        # Attribution du heat
-        # ==========================================
-
+        # ---------------------------
+        # ENREGISTREMENT HEAT
+        # ---------------------------
         worked_this_heat = set()
 
         for row in heat["rows"]:
 
-            lane = str(
-                int(float(row["Lane"]))
-            )
-
+            lane = str(int(float(row["Lane"])))
             judge = lane_assignment.get(lane)
 
             if judge is None:
-                continue
+                continue  # sécurité
 
             planning[judge].append({
                 "wod": clean_text(str(row["Workout"])),
@@ -401,37 +364,31 @@ def assign_judges_equitable(
             })
 
             worked_this_heat.add(judge)
-
             state[judge]["count"] += 1
 
-        # ==========================================
-        # Mise à jour ON / OFF
-        # ==========================================
+        # ---------------------------
+        # UPDATE ON/OFF
+        # ---------------------------
+        for j in judges:
 
-        for judge in judges:
+            if state[j]["phase"] == "ON":
 
-            if judge in worked_this_heat:
+                if j in worked_this_heat:
+                    state[j]["remaining"] -= 1
 
-                if state[judge]["phase"] == "ON":
+                    if state[j]["remaining"] <= 0:
+                        state[j]["phase"] = "OFF"
+                        state[j]["remaining"] = OFF
 
-                    state[judge]["remaining"] -= 1
+                else:
+                    state[j]["remaining"] -= 1
+                    if state[j]["remaining"] <= 0:
+                        state[j]["phase"] = "AVAILABLE"
 
-                    if state[judge]["remaining"] <= 0:
-
-                        state[judge]["phase"] = "OFF"
-                        state[judge]["remaining"] = OFF
-                        state[judge]["lane"] = None
-
-            else:
-
-                if state[judge]["phase"] == "OFF":
-
-                    state[judge]["remaining"] -= 1
-
-                    if state[judge]["remaining"] <= 0:
-
-                        state[judge]["phase"] = "AVAILABLE"
-                        state[judge]["remaining"] = 0
+            elif state[j]["phase"] == "OFF":
+                state[j]["remaining"] -= 1
+                if state[j]["remaining"] <= 0:
+                    state[j]["phase"] = "AVAILABLE"
 
     return planning
 # ========================
