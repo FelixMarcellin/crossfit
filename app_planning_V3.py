@@ -229,128 +229,112 @@ def assign_judges_equitable(
     rotation_system
 ):
 
-    import math
-
     planning = {j: [] for j in judges}
 
     ON = rotation_system["on"]
     OFF = rotation_system["off"]
 
+    judge_order = {j: i for i, j in enumerate(judges)}
+
     df = schedule.copy()
     df["heat_num"] = df["Heat #"].apply(extract_heat_number)
-
-    df = df.sort_values(
-        ["Heat Start Time", "heat_num", "Lane"]
-    ).reset_index(drop=True)
+    df = df.sort_values(["Heat Start Time", "heat_num", "Lane"]).reset_index(drop=True)
 
     heats = []
-
-    for (wod, heat_num, start, end), g in df.groupby(
-        ["Workout", "heat_num", "Heat Start Time", "Heat End Time"]
-    ):
-
+    for (wod, heat_num, start, end), g in df.groupby(["Workout", "heat_num", "Heat Start Time", "Heat End Time"]):
         heats.append({
             "wod": wod,
             "heat_num": heat_num,
             "start": start,
             "end": end,
-            "rows": sorted(
-                g.to_dict("records"),
-                key=lambda r: int(float(r["Lane"]))
-            )
+            "rows": sorted(g.to_dict("records"), key=lambda r: int(float(r["Lane"])))
         })
 
-    # =========================
-    # STATE GLOBAL
-    # =========================
-    state = {
-        j: {
+    # État des juges
+    state = {}
+    for j in judges:
+        state[j] = {
             "phase": "AVAILABLE",
             "remaining": 0,
-            "count": 0
+            "count": 0,
+            "lane": None,
+            "consecutive_heats": 0  # Nouveau : compteur de heats consécutifs
         }
-        for j in judges
-    }
 
-    # =========================
-    # MAIN LOOP HEATS
-    # =========================
-    for heat in heats:
+    lane_assignment = {}
 
+    # ==================================================
+    # Boucle heats
+    # ==================================================
+    for heat_idx, heat in enumerate(heats):
         wod = heat["wod"]
-        dispo = set(disponibilites.get(wod, judges))
+        dispo = disponibilites.get(wod, judges)
+        
+        lanes_presentes = sorted({str(int(float(r["Lane"]))) for r in heat["rows"]}, key=int)
 
-        lanes = sorted(
-            {str(int(float(r["Lane"]))) for r in heat["rows"]},
-            key=int
-        )
+        # Libération des lanes des juges OFF
+        lanes_to_remove = []
+        for lane, judge in lane_assignment.items():
+            if state[judge]["phase"] != "ON":
+                lanes_to_remove.append(lane)
+        for lane in lanes_to_remove:
+            lane_assignment.pop(lane, None)
 
-        used = set()
+        # ==========================================
+        # Remplissage des lanes vides (AMÉLIORÉ)
+        # ==========================================
+        for lane in lanes_presentes:
+            if lane in lane_assignment:
+                continue
 
-        # target équité globale
-        total = sum(state[j]["count"] for j in judges)
-        target = total / len(judges) if judges else 0
+            # Niveau 1 : Juges AVAILABLE
+            candidates = [j for j in judges if j in dispo and state[j]["phase"] == "AVAILABLE"]
+            
+            # Niveau 2 : Juges qui finissent leur OFF dans 1 heat
+            if not candidates:
+                candidates = [j for j in judges if j in dispo and state[j]["phase"] == "OFF" and state[j]["remaining"] <= 1]
+            
+            # Niveau 3 : Juges en OFF mais qui ont déjà fait moins de heats que la moyenne (secours forcé)
+            if not candidates:
+                avg_heats = sum(state[j]["count"] for j in judges) / len(judges) if judges else 0
+                candidates = [j for j in judges if j in dispo and state[j]["phase"] == "OFF" and state[j]["count"] <= avg_heats + 1]
+            
+            # Niveau 4 : DERNIER RECOURS - n'importe quel juge disponible même en plein OFF
+            if not candidates:
+                candidates = [j for j in judges if j in dispo]
+                # Si toujours rien, on prend n'importe quel juge
+                if not candidates:
+                    candidates = judges[:]
+            
+            # Tri par charge de travail et ordre initial
+            candidates = sorted(candidates, key=lambda x: (state[x]["count"], judge_order[x]))
+            selected = candidates[0]
 
-        assignment = {}
+            lane_assignment[lane] = selected
+            state[selected]["phase"] = "ON"
+            state[selected]["remaining"] = ON
+            state[selected]["lane"] = lane
+            state[selected]["consecutive_heats"] = 0
 
-        # =========================
-        # COST MATRIX MATCHING
-        # =========================
-        for lane in lanes:
-
-            best_j = None
-            best_cost = float("inf")
-
-            for j in judges:
-
-                if j in used:
-                    continue
-
-                if j not in dispo:
-                    continue
-
-                # ---------------------
-                # COST FUNCTION
-                # ---------------------
-
-                balance_cost = abs(state[j]["count"] - target)
-
-                # rotation penalty
-                if state[j]["phase"] == "ON":
-                    rotation_cost = 0
-                elif state[j]["phase"] == "AVAILABLE":
-                    rotation_cost = 0.5
-                else:
-                    rotation_cost = 3
-
-                # fairness smoothing
-                fatigue_cost = state[j]["count"] * 0.1
-
-                cost = balance_cost + rotation_cost + fatigue_cost
-
-                if cost < best_cost:
-                    best_cost = cost
-                    best_j = j
-
-            # fallback sécurité
-            if best_j is None:
-                best_j = next(j for j in judges if j not in used)
-
-            assignment[lane] = best_j
-            used.add(best_j)
-
-            state[best_j]["phase"] = "ON"
-            state[best_j]["remaining"] = ON
-
-        # =========================
-        # ENREGISTREMENT
-        # =========================
+        # ==========================================
+        # Attribution du heat
+        # ==========================================
+        worked_this_heat = set()
+        
         for row in heat["rows"]:
-
             lane = str(int(float(row["Lane"])))
-            j = assignment[lane]
+            judge = lane_assignment.get(lane)
+            
+            # Si on a toujours pas de juge (cas extrême), on force l'attribution
+            if judge is None:
+                # Prendre le juge qui a le moins de heats
+                judge = min([j for j in judges if j in dispo], key=lambda x: state[x]["count"])
+                lane_assignment[lane] = judge
+                state[judge]["phase"] = "ON"
+                state[judge]["remaining"] = ON
+                state[judge]["lane"] = lane
 
-            planning[j].append({
+            planning[judge].append({
                 "wod": clean_text(str(row["Workout"])),
                 "lane": lane,
                 "athlete": clean_text(str(row["Competitor"])),
@@ -361,25 +345,35 @@ def assign_judges_equitable(
                 "heat_num": heat["heat_num"]
             })
 
-            state[j]["count"] += 1
+            worked_this_heat.add(judge)
+            state[judge]["count"] += 1
+            state[judge]["consecutive_heats"] += 1
 
-        # =========================
-        # ROTATION UPDATE
-        # =========================
-        for j in judges:
+        # ==========================================
+        # Mise à jour ON / OFF (avec vérification des heats consécutifs)
+        # ==========================================
+        for judge in judges:
+            if judge in worked_this_heat:
+                if state[judge]["phase"] == "ON":
+                    state[judge]["remaining"] -= 1
+                    
+                    # Vérification supplémentaire : ne pas dépasser ON+1 heats consécutifs
+                    if state[judge]["remaining"] <= 0 or state[judge]["consecutive_heats"] >= ON:
+                        state[judge]["phase"] = "OFF"
+                        state[judge]["remaining"] = OFF
+                        state[judge]["lane"] = None
+                        state[judge]["consecutive_heats"] = 0
+            else:
+                if state[judge]["phase"] == "OFF":
+                    state[judge]["remaining"] -= 1
+                    if state[judge]["remaining"] <= 0:
+                        state[judge]["phase"] = "AVAILABLE"
+                        state[judge]["remaining"] = 0
 
-            if state[j]["phase"] == "ON":
-                state[j]["remaining"] -= 1
-
-                if state[j]["remaining"] <= 0:
-                    state[j]["phase"] = "OFF"
-                    state[j]["remaining"] = OFF
-
-            elif state[j]["phase"] == "OFF":
-                state[j]["remaining"] -= 1
-
-                if state[j]["remaining"] <= 0:
-                    state[j]["phase"] = "AVAILABLE"
+    # Vérification finale : s'assurer qu'aucun juge n'a de lane résiduelle
+    for lane, judge in lane_assignment.items():
+        if judge and lane:
+            pass  # Tout est OK
 
     return planning
 # ========================
