@@ -396,7 +396,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 )
             )
 
-selected = candidates[0]
+            selected = candidates[0]
 
             lane_assignment[lane] = selected
 
