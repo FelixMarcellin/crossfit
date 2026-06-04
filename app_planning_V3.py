@@ -261,7 +261,7 @@ def assign_judges_equitable(
         })
 
     # =========================
-    # STATE
+    # STATE GLOBAL
     # =========================
     state = {
         j: {
@@ -282,81 +282,84 @@ def assign_judges_equitable(
         wod = heat["wod"]
         dispo = set(disponibilites.get(wod, judges))
 
-        lanes_presentes = sorted(
-            {
-                str(int(float(r["Lane"])))
-                for r in heat["rows"]
-            },
-            key=int
-        )
+        lanes = sorted({
+            str(int(float(r["Lane"])))
+            for r in heat["rows"]
+        }, key=int)
 
-        # 🔒 IMPORTANT : reset par heat
-        used_judges = set()
+        used = set()
 
         # =========================
-        # ASSIGNATION LANE PAR LANE
+        # TARGET ÉQUILIBRE
         # =========================
-        for lane in lanes_presentes:
+        total = sum(state[j]["count"] for j in judges)
+        target = total / len(judges) if judges else 0
 
-            if lane in lane_assignment:
-                continue
+        # =========================
+        # MATCHING GLOBAL SIMPLE
+        # =========================
+        for lane in lanes:
 
-            # candidats disponibles
-            candidates = [
-                j for j in judges
-                if j in dispo
-                and j not in used_judges
-            ]
+            best_j = None
+            best_score = float("inf")
 
-            # fallback 1 : ignore ON/OFF mais respecte dispo
-            if not candidates:
-                candidates = [
-                    j for j in judges
-                    if j in dispo
-                    and j not in used_judges
-                ]
+            for j in judges:
 
-            # fallback 2 : dernier recours global (toujours sans doublon)
-            if not candidates:
-                candidates = [
-                    j for j in judges
-                    if j not in used_judges
-                ]
+                if j in used:
+                    continue
 
-            # sécurité absolue
-            if not candidates:
-                raise Exception(f"Impossible d'assigner lane {lane} (heat {heat['heat_num']})")
+                if j not in dispo:
+                    continue
 
-            # équilibrage simple et stable
-            selected = sorted(
-                candidates,
-                key=lambda x: (
-                    state[x]["count"],
-                    judge_order[x]
-                )
-            )[0]
+                # -------------------------
+                # SCORE MULTI CRITÈRES
+                # -------------------------
+                balance = abs(state[j]["count"] - target)
 
-            lane_assignment[lane] = selected
-            used_judges.add(selected)
+                rotation_penalty = 0
+                if state[j]["phase"] == "OFF":
+                    rotation_penalty = 3
+                elif state[j]["phase"] == "AVAILABLE":
+                    rotation_penalty = 0.5
 
-            # état ON
-            state[selected]["phase"] = "ON"
-            state[selected]["remaining"] = ON
+                stability = judge_order[j] * 0.01
+
+                score = balance + rotation_penalty + stability
+
+                if score < best_score:
+                    best_score = score
+                    best_j = j
+
+            # fallback sécurité absolue
+            if best_j is None:
+                for j in judges:
+                    if j not in used:
+                        best_j = j
+                        break
+
+            if best_j is None:
+                raise Exception(f"Aucune assignation possible heat {heat['heat_num']}")
+
+            lane_assignment[lane] = best_j
+            used.add(best_j)
+
+            state[best_j]["phase"] = "ON"
+            state[best_j]["remaining"] = ON
 
         # =========================
         # ENREGISTREMENT
         # =========================
-        worked_this_heat = set()
+        worked = set()
 
         for row in heat["rows"]:
 
             lane = str(int(float(row["Lane"])))
-            judge = lane_assignment.get(lane)
+            j = lane_assignment.get(lane)
 
-            if judge is None:
+            if not j:
                 continue
 
-            planning[judge].append({
+            planning[j].append({
                 "wod": clean_text(str(row["Workout"])),
                 "lane": lane,
                 "athlete": clean_text(str(row["Competitor"])),
@@ -367,8 +370,8 @@ def assign_judges_equitable(
                 "heat_num": heat["heat_num"]
             })
 
-            worked_this_heat.add(judge)
-            state[judge]["count"] += 1
+            worked.add(j)
+            state[j]["count"] += 1
 
         # =========================
         # ROTATION UPDATE
@@ -377,7 +380,7 @@ def assign_judges_equitable(
 
             if state[j]["phase"] == "ON":
 
-                if j in worked_this_heat:
+                if j in worked:
                     state[j]["remaining"] -= 1
 
                     if state[j]["remaining"] <= 0:
