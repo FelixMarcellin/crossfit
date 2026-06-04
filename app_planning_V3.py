@@ -260,9 +260,9 @@ def assign_judges_equitable(
             )
         })
 
-    # ---------------------------
+    # =========================
     # STATE
-    # ---------------------------
+    # =========================
     state = {
         j: {
             "phase": "AVAILABLE",
@@ -274,13 +274,13 @@ def assign_judges_equitable(
 
     lane_assignment = {}
 
-    # ===========================
+    # =========================
     # MAIN LOOP
-    # ===========================
+    # =========================
     for heat in heats:
 
         wod = heat["wod"]
-        dispo = disponibilites.get(wod, judges)
+        dispo = set(disponibilites.get(wod, judges))
 
         lanes_presentes = sorted(
             {
@@ -290,44 +290,47 @@ def assign_judges_equitable(
             key=int
         )
 
-        # ---------------------------
-        # Reset lanes invalides
-        # ---------------------------
-        lane_assignment = {
-            lane: j
-            for lane, j in lane_assignment.items()
-            if state[j]["phase"] == "ON"
-        }
+        # IMPORTANT : reset used judges per heat
+        used_this_heat = set()
 
-        # ---------------------------
-        # ASSIGNATION LANE PAR LANE
-        # ---------------------------
+        # =========================
+        # ASSIGN LANE BY LANE
+        # =========================
         for lane in lanes_presentes:
 
+            # sécurité si déjà assigné
             if lane in lane_assignment:
                 continue
 
-            # 1) candidats disponibles
+            # candidats disponibles + pas déjà utilisés dans ce heat
             candidates = [
                 j for j in judges
                 if j in dispo
+                and j not in used_this_heat
             ]
 
-            # 2) priorité : AVAILABLE
-            available = [
-                j for j in candidates
-                if state[j]["phase"] == "AVAILABLE"
-            ]
+            # fallback si nécessaire (mais toujours sans doublon)
+            if not candidates:
+                candidates = [
+                    j for j in judges
+                    if j in dispo
+                    and j not in used_this_heat
+                ]
 
-            pool = available if available else candidates
+            # dernier recours ABSOLU (garantie sécurité)
+            if not candidates:
+                candidates = [
+                    j for j in judges
+                    if j not in used_this_heat
+                ]
 
-            # 3) fallback ABSOLU (jamais vide)
-            if not pool:
-                pool = judges[:]  # last resort global
+            # si toujours vide (cas impossible normalement)
+            if not candidates:
+                continue
 
-            # 4) choix équilibré
+            # choix équilibré
             selected = sorted(
-                pool,
+                candidates,
                 key=lambda x: (
                     state[x]["count"],
                     judge_order[x]
@@ -335,13 +338,15 @@ def assign_judges_equitable(
             )[0]
 
             lane_assignment[lane] = selected
+            used_this_heat.add(selected)
 
+            # état
             state[selected]["phase"] = "ON"
             state[selected]["remaining"] = ON
 
-        # ---------------------------
-        # ENREGISTREMENT HEAT
-        # ---------------------------
+        # =========================
+        # ENREGISTREMENT
+        # =========================
         worked_this_heat = set()
 
         for row in heat["rows"]:
@@ -350,7 +355,7 @@ def assign_judges_equitable(
             judge = lane_assignment.get(lane)
 
             if judge is None:
-                continue  # sécurité
+                continue
 
             planning[judge].append({
                 "wod": clean_text(str(row["Workout"])),
@@ -366,9 +371,9 @@ def assign_judges_equitable(
             worked_this_heat.add(judge)
             state[judge]["count"] += 1
 
-        # ---------------------------
-        # UPDATE ON/OFF
-        # ---------------------------
+        # =========================
+        # ROTATION UPDATE ON/OFF
+        # =========================
         for j in judges:
 
             if state[j]["phase"] == "ON":
@@ -382,11 +387,13 @@ def assign_judges_equitable(
 
                 else:
                     state[j]["remaining"] -= 1
+
                     if state[j]["remaining"] <= 0:
                         state[j]["phase"] = "AVAILABLE"
 
             elif state[j]["phase"] == "OFF":
                 state[j]["remaining"] -= 1
+
                 if state[j]["remaining"] <= 0:
                     state[j]["phase"] = "AVAILABLE"
 
