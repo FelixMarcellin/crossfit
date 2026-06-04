@@ -273,6 +273,7 @@ def assign_judges_equitable(
     }
 
     lane_assignment = {}
+    total_assigned = 0
 
     # =========================
     # MAIN LOOP
@@ -290,57 +291,65 @@ def assign_judges_equitable(
             key=int
         )
 
-        # IMPORTANT : reset used judges per heat
         used_this_heat = set()
 
+        # target dynamique d'équilibrage
+        target = total_assigned / len(judges) if judges else 0
+
         # =========================
-        # ASSIGN LANE BY LANE
+        # SCORE FUNCTION
+        # =========================
+        def judge_score(j):
+            s = state[j]
+
+            # équilibre global
+            balance = abs(s["count"] - target)
+
+            # respect rotation
+            if s["phase"] == "ON":
+                rotation_penalty = 0
+            elif s["phase"] == "AVAILABLE":
+                rotation_penalty = 0.5
+            else:  # OFF
+                rotation_penalty = 5
+
+            # stabilité
+            stability = judge_order[j] * 0.01
+
+            return balance + rotation_penalty + stability
+
+        # =========================
+        # ASSIGNATION LANES
         # =========================
         for lane in lanes_presentes:
 
-            # sécurité si déjà assigné
             if lane in lane_assignment:
                 continue
 
-            # candidats disponibles + pas déjà utilisés dans ce heat
+            # candidats valides
             candidates = [
                 j for j in judges
                 if j in dispo
                 and j not in used_this_heat
             ]
 
-            # fallback si nécessaire (mais toujours sans doublon)
+            # fallback 1 : ignorer ON/OFF mais respecter dispo
             if not candidates:
                 candidates = [
                     j for j in judges
                     if j in dispo
-                    and j not in used_this_heat
                 ]
 
-            # dernier recours ABSOLU (garantie sécurité)
+            # fallback 2 : tout juge libre (sécurité)
             if not candidates:
-                candidates = [
-                    j for j in judges
-                    if j not in used_this_heat
-                ]
+                candidates = judges[:]
 
-            # si toujours vide (cas impossible normalement)
-            if not candidates:
-                continue
-
-            # choix équilibré
-            selected = sorted(
-                candidates,
-                key=lambda x: (
-                    state[x]["count"],
-                    judge_order[x]
-                )
-            )[0]
+            # choix optimal
+            selected = min(candidates, key=judge_score)
 
             lane_assignment[lane] = selected
             used_this_heat.add(selected)
 
-            # état
             state[selected]["phase"] = "ON"
             state[selected]["remaining"] = ON
 
@@ -370,9 +379,10 @@ def assign_judges_equitable(
 
             worked_this_heat.add(judge)
             state[judge]["count"] += 1
+            total_assigned += 1
 
         # =========================
-        # ROTATION UPDATE ON/OFF
+        # ROTATION UPDATE
         # =========================
         for j in judges:
 
