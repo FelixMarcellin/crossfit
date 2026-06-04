@@ -352,9 +352,42 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                     ):
                         candidates.append(j)
 
+            # =====================================================
+            # Sécurité absolue :
+            # chaque lane doit avoir un juge
+            # =====================================================
+            
             if len(candidates) == 0:
-                continue
-
+            
+                # 1) AVAILABLE
+                candidates = [
+                    j for j in judges
+                    if j in dispo
+                    and state[j]["phase"] == "AVAILABLE"
+                ]
+            
+            if len(candidates) == 0:
+            
+                # 2) OFF presque terminé
+                candidates = [
+                    j for j in judges
+                    if j in dispo
+                    and state[j]["phase"] == "OFF"
+                ]
+            
+            if len(candidates) == 0:
+            
+                # 3) n'importe quel juge dispo
+                candidates = [
+                    j for j in judges
+                    if j in dispo
+                ]
+            
+            if len(candidates) == 0:
+            
+                # 4) dernier secours
+                candidates = list(judges)
+            
             candidates = sorted(
                 candidates,
                 key=lambda j: (
@@ -363,7 +396,7 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_config):
                 )
             )
 
-            selected = candidates[0]
+selected = candidates[0]
 
             lane_assignment[lane] = selected
 
