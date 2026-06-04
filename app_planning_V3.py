@@ -229,12 +229,12 @@ def assign_judges_equitable(
     rotation_system
 ):
 
+    import math
+
     planning = {j: [] for j in judges}
 
     ON = rotation_system["on"]
     OFF = rotation_system["off"]
-
-    judge_order = {j: i for i, j in enumerate(judges)}
 
     df = schedule.copy()
     df["heat_num"] = df["Heat #"].apply(extract_heat_number)
@@ -272,36 +272,34 @@ def assign_judges_equitable(
         for j in judges
     }
 
-    lane_assignment = {}
-
     # =========================
-    # LOOP HEATS
+    # MAIN LOOP HEATS
     # =========================
     for heat in heats:
 
         wod = heat["wod"]
         dispo = set(disponibilites.get(wod, judges))
 
-        lanes = sorted({
-            str(int(float(r["Lane"])))
-            for r in heat["rows"]
-        }, key=int)
+        lanes = sorted(
+            {str(int(float(r["Lane"]))) for r in heat["rows"]},
+            key=int
+        )
 
         used = set()
 
-        # =========================
-        # TARGET ÉQUILIBRE
-        # =========================
+        # target équité globale
         total = sum(state[j]["count"] for j in judges)
         target = total / len(judges) if judges else 0
 
+        assignment = {}
+
         # =========================
-        # MATCHING GLOBAL SIMPLE
+        # COST MATRIX MATCHING
         # =========================
         for lane in lanes:
 
             best_j = None
-            best_score = float("inf")
+            best_cost = float("inf")
 
             for j in judges:
 
@@ -311,36 +309,34 @@ def assign_judges_equitable(
                 if j not in dispo:
                     continue
 
-                # -------------------------
-                # SCORE MULTI CRITÈRES
-                # -------------------------
-                balance = abs(state[j]["count"] - target)
+                # ---------------------
+                # COST FUNCTION
+                # ---------------------
 
-                rotation_penalty = 0
-                if state[j]["phase"] == "OFF":
-                    rotation_penalty = 3
+                balance_cost = abs(state[j]["count"] - target)
+
+                # rotation penalty
+                if state[j]["phase"] == "ON":
+                    rotation_cost = 0
                 elif state[j]["phase"] == "AVAILABLE":
-                    rotation_penalty = 0.5
+                    rotation_cost = 0.5
+                else:
+                    rotation_cost = 3
 
-                stability = judge_order[j] * 0.01
+                # fairness smoothing
+                fatigue_cost = state[j]["count"] * 0.1
 
-                score = balance + rotation_penalty + stability
+                cost = balance_cost + rotation_cost + fatigue_cost
 
-                if score < best_score:
-                    best_score = score
+                if cost < best_cost:
+                    best_cost = cost
                     best_j = j
 
-            # fallback sécurité absolue
+            # fallback sécurité
             if best_j is None:
-                for j in judges:
-                    if j not in used:
-                        best_j = j
-                        break
+                best_j = next(j for j in judges if j not in used)
 
-            if best_j is None:
-                raise Exception(f"Aucune assignation possible heat {heat['heat_num']}")
-
-            lane_assignment[lane] = best_j
+            assignment[lane] = best_j
             used.add(best_j)
 
             state[best_j]["phase"] = "ON"
@@ -349,15 +345,10 @@ def assign_judges_equitable(
         # =========================
         # ENREGISTREMENT
         # =========================
-        worked = set()
-
         for row in heat["rows"]:
 
             lane = str(int(float(row["Lane"])))
-            j = lane_assignment.get(lane)
-
-            if not j:
-                continue
+            j = assignment[lane]
 
             planning[j].append({
                 "wod": clean_text(str(row["Workout"])),
@@ -370,7 +361,6 @@ def assign_judges_equitable(
                 "heat_num": heat["heat_num"]
             })
 
-            worked.add(j)
             state[j]["count"] += 1
 
         # =========================
@@ -379,19 +369,11 @@ def assign_judges_equitable(
         for j in judges:
 
             if state[j]["phase"] == "ON":
+                state[j]["remaining"] -= 1
 
-                if j in worked:
-                    state[j]["remaining"] -= 1
-
-                    if state[j]["remaining"] <= 0:
-                        state[j]["phase"] = "OFF"
-                        state[j]["remaining"] = OFF
-
-                else:
-                    state[j]["remaining"] -= 1
-
-                    if state[j]["remaining"] <= 0:
-                        state[j]["phase"] = "AVAILABLE"
+                if state[j]["remaining"] <= 0:
+                    state[j]["phase"] = "OFF"
+                    state[j]["remaining"] = OFF
 
             elif state[j]["phase"] == "OFF":
                 state[j]["remaining"] -= 1
