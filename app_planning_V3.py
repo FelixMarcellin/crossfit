@@ -526,30 +526,19 @@ def main():
 
     st.header("⚙️ Roulement par WOD")
 
-    rotation_options = [
+    rotation_system = st.selectbox(
+    "Roulement",
+    [
         {"name": "1-on / 1-off", "on": 1, "off": 1},
         {"name": "2-on / 1-off", "on": 2, "off": 1},
         {"name": "2-on / 2-off", "on": 2, "off": 2},
         {"name": "3-on / 2-off", "on": 3, "off": 2},
         {"name": "3-on / 3-off", "on": 3, "off": 3},
         {"name": "4-on / 2-off", "on": 4, "off": 2},
-    ]
-
-    rotation_by_wod = {}
-
-    cols = st.columns(3)
-
-    for i, wod in enumerate(wods):
-
-        with cols[i % 3]:
-
-            rotation_by_wod[wod] = st.selectbox(
-                f"Roulement {wod}",
-                rotation_options,
-                index=4,
-                format_func=lambda x: x["name"],
-                key=f"rotation_{wod}"
-            )
+    ],
+    index=4,
+    format_func=lambda x: x["name"]
+)
 
     # ==================================================
     # Disponibilités
