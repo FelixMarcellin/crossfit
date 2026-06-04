@@ -597,7 +597,7 @@ def main():
                 schedule,
                 judges,
                 disponibilites,
-                rotation_by_wod
+                rotation_system
             )
 
             st.success("✅ Planning généré")
