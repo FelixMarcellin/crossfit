@@ -222,14 +222,22 @@ def extract_heat_number(heat_str):
 # ========================================================
 # NOUVEL ALGORITHME : SUIVI ET ROULEMENT STRICT PAR LIGNE
 # ========================================================
-def assign_judges_equitable(schedule, judges, disponibilites, rotation_system):
+def assign_judges_equitable(
+    schedule,
+    judges,
+    disponibilites,
+    rotation_system
+):
 
     planning = {j: [] for j in judges}
 
-    judge_order = {j: i for i, j in enumerate(judges)}
-
     ON = rotation_system["on"]
     OFF = rotation_system["off"]
+
+    judge_order = {
+        j: i
+        for i, j in enumerate(judges)
+    }
 
     df = schedule.copy()
 
@@ -256,23 +264,36 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_system):
             )
         })
 
-    state = {
-        j: {
+    # ==================================================
+    # Etat juges
+    # ==================================================
+
+    state = {}
+
+    for j in judges:
+
+        state[j] = {
             "phase": "AVAILABLE",
             "remaining": 0,
-            "count": 0
+            "count": 0,
+            "lane": None
         }
-        for j in judges
-    }
 
     # lane -> juge
     lane_assignment = {}
+
+    # ==================================================
+    # Boucle heats
+    # ==================================================
 
     for heat in heats:
 
         wod = heat["wod"]
 
-        dispo = disponibilites.get(wod, judges)
+        dispo = disponibilites.get(
+            wod,
+            judges
+        )
 
         lanes_presentes = sorted(
             {
@@ -282,23 +303,9 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_system):
             key=int
         )
 
-        # ==================================================
-        # Mise à jour OFF -> AVAILABLE
-        # ==================================================
-
-        for judge in judges:
-
-            if state[judge]["phase"] == "OFF":
-
-                state[judge]["remaining"] -= 1
-
-                if state[judge]["remaining"] <= 0:
-
-                    state[judge]["phase"] = "AVAILABLE"
-
-        # ==================================================
-        # Nettoyage des lanes dont le juge a terminé son bloc
-        # ==================================================
+        # ==========================================
+        # Libération des lanes des juges OFF
+        # ==========================================
 
         lanes_to_remove = []
 
@@ -308,11 +315,12 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_system):
                 lanes_to_remove.append(lane)
 
         for lane in lanes_to_remove:
-            del lane_assignment[lane]
 
-        # ==================================================
-        # Attribution des lanes libres
-        # ==================================================
+            lane_assignment.pop(lane, None)
+
+        # ==========================================
+        # Remplissage des lanes vides
+        # ==========================================
 
         for lane in lanes_presentes:
 
@@ -326,12 +334,12 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_system):
                 if j not in dispo:
                     continue
 
-                if state[j]["phase"] != "AVAILABLE":
-                    continue
+                if state[j]["phase"] == "AVAILABLE":
 
-                candidates.append(j)
+                    candidates.append(j)
 
-            # secours : autorise un OFF terminé à 1 heat près
+            # secours :
+            # autoriser un juge qui termine son OFF
             if not candidates:
 
                 for j in judges:
@@ -350,9 +358,9 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_system):
 
             candidates = sorted(
                 candidates,
-                key=lambda j: (
-                    state[j]["count"],
-                    judge_order[j]
+                key=lambda x: (
+                    state[x]["count"],
+                    judge_order[x]
                 )
             )
 
@@ -362,16 +370,19 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_system):
 
             state[selected]["phase"] = "ON"
             state[selected]["remaining"] = ON
+            state[selected]["lane"] = lane
 
-        # ==================================================
+        # ==========================================
         # Attribution du heat
-        # ==================================================
+        # ==========================================
 
         worked_this_heat = set()
 
         for row in heat["rows"]:
 
-            lane = str(int(float(row["Lane"])))
+            lane = str(
+                int(float(row["Lane"]))
+            )
 
             judge = lane_assignment.get(lane)
 
@@ -393,20 +404,34 @@ def assign_judges_equitable(schedule, judges, disponibilites, rotation_system):
 
             state[judge]["count"] += 1
 
-        # ==================================================
-        # Fin de heat
-        # ==================================================
+        # ==========================================
+        # Mise à jour ON / OFF
+        # ==========================================
 
-        for judge in worked_this_heat:
+        for judge in judges:
 
-            if state[judge]["phase"] == "ON":
+            if judge in worked_this_heat:
 
-                state[judge]["remaining"] -= 1
+                if state[judge]["phase"] == "ON":
 
-                if state[judge]["remaining"] <= 0:
+                    state[judge]["remaining"] -= 1
 
-                    state[judge]["phase"] = "OFF"
-                    state[judge]["remaining"] = OFF
+                    if state[judge]["remaining"] <= 0:
+
+                        state[judge]["phase"] = "OFF"
+                        state[judge]["remaining"] = OFF
+                        state[judge]["lane"] = None
+
+            else:
+
+                if state[judge]["phase"] == "OFF":
+
+                    state[judge]["remaining"] -= 1
+
+                    if state[judge]["remaining"] <= 0:
+
+                        state[judge]["phase"] = "AVAILABLE"
+                        state[judge]["remaining"] = 0
 
     return planning
 # ========================
