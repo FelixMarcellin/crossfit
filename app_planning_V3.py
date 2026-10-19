@@ -1,14 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Created on Mon Oct 19 15:32:57 2026
-
-@author: felima
-"""
-
-# -*- coding: utf-8 -*-
-"""
 Planning Juges équilibré - Crossfit Amiens
-Version 10.1 : Roulement par ligne strict + export HTML interactif
+Version 10.2 : Roulement par ligne strict + export HTML interactif avec gestion date/heure
 """
 
 import streamlit as st
@@ -229,6 +222,57 @@ def extract_heat_number(heat_str):
 
 
 # ========================================================
+# EXTRACTION DATE + HEURE ROBUSTE (US / ISO / heure seule)
+# ========================================================
+def extract_datetime_parts(value, default_date_str):
+    """
+    Retourne (time_str 'HH:MM', date_str 'YYYY-MM-DD') depuis différentes formes :
+    - datetime pandas -> direct
+    - '10/17/2026 08:30:00' (format US) -> ('08:30', '2026-10-17')
+    - '2026-10-17 08:30:00' (ISO) -> ('08:30', '2026-10-17')
+    - '08:30:00' (heure seule) -> ('08:30', default_date_str)
+    - '08:30' -> ('08:30', default_date_str)
+    """
+    if pd.isna(value):
+        return "", default_date_str
+
+    # Cas datetime / Timestamp pandas
+    if isinstance(value, (pd.Timestamp, datetime)):
+        return value.strftime("%H:%M"), value.strftime("%Y-%m-%d")
+
+    s = str(value).strip()
+
+    # --- Cas format US : MM/DD/YYYY HH:MM[:SS] ---
+    m_us = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?', s)
+    if m_us:
+        month, day, year, hh, mm = m_us.groups()
+        date_str = f"{year}-{int(month):02d}-{int(day):02d}"
+        if hh is not None and mm is not None:
+            time_str = f"{int(hh):02d}:{mm}"
+        else:
+            time_str = ""
+        return time_str, date_str
+
+    # --- Cas format ISO : YYYY-MM-DD HH:MM[:SS] ---
+    m_iso = re.search(r'(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2}))?', s)
+    if m_iso:
+        year, month, day, hh, mm = m_iso.groups()
+        date_str = f"{year}-{month}-{day}"
+        if hh is not None and mm is not None:
+            time_str = f"{int(hh):02d}:{mm}"
+        else:
+            time_str = ""
+        return time_str, date_str
+
+    # --- Cas heure seule : HH:MM[:SS] ou HHhMM ---
+    m_time = re.search(r'(\d{1,2})[:hH](\d{2})', s)
+    if m_time:
+        return f"{int(m_time.group(1)):02d}:{m_time.group(2)}", default_date_str
+
+    return "", default_date_str
+
+
+# ========================================================
 # NOUVEL ALGORITHME : SUIVI ET ROULEMENT STRICT PAR LIGNE
 # ========================================================
 def assign_judges_equitable(
@@ -281,7 +325,7 @@ def assign_judges_equitable(
         
         lanes_presentes = sorted({str(int(float(r["Lane"]))) for r in heat["rows"]}, key=int)
 
-        # 🔴 NOUVEAU : Ensemble des juges déjà utilisés dans CE heat
+        # Ensemble des juges déjà utilisés dans CE heat
         judges_used_this_heat = set()
 
         # Libération des lanes des juges OFF
@@ -293,23 +337,17 @@ def assign_judges_equitable(
             lane_assignment.pop(lane, None)
 
         # ==========================================
-        # Remplissage des lanes vides (CORRIGÉ)
+        # Remplissage des lanes vides
         # ==========================================
         for lane in lanes_presentes:
             if lane in lane_assignment:
                 judge = lane_assignment[lane]
-                # Vérification critique : ce juge est-il déjà utilisé dans ce heat ?
                 if judge in judges_used_this_heat:
-                    # Problème ! Un juge ne peut pas être sur 2 lanes à la fois
                     lane_assignment.pop(lane, None)
                 else:
                     judges_used_this_heat.add(judge)
                     continue
 
-            # ======================================
-            # Recherche d'un nouveau juge pour cette lane
-            # ======================================
-            
             # Niveau 1 : Juges AVAILABLE et pas déjà utilisés dans ce heat
             candidates = [
                 j for j in judges 
@@ -346,16 +384,14 @@ def assign_judges_equitable(
                     if j in dispo 
                     and j not in judges_used_this_heat
                 ]
-                # Si toujours rien, on prend n'importe quel juge (même déjà utilisé - CAS EXTRÊME)
                 if not candidates:
                     candidates = [j for j in judges if j not in judges_used_this_heat]
             
-            # Tri par charge de travail et ordre initial
             candidates = sorted(candidates, key=lambda x: (state[x]["count"], judge_order[x]))
             selected = candidates[0]
 
             lane_assignment[lane] = selected
-            judges_used_this_heat.add(selected)  # 🔴 CRUCIAL : marquer comme utilisé
+            judges_used_this_heat.add(selected)
             state[selected]["phase"] = "ON"
             state[selected]["remaining"] = ON
             state[selected]["lane"] = lane
@@ -370,9 +406,7 @@ def assign_judges_equitable(
             lane = str(int(float(row["Lane"])))
             judge = lane_assignment.get(lane)
             
-            # Si on a toujours pas de juge (cas extrême)
             if judge is None:
-                # Prendre le juge le moins sollicité et pas déjà utilisé
                 available_judges = [j for j in judges if j in dispo and j not in judges_used_this_heat]
                 if not available_judges:
                     available_judges = [j for j in judges if j not in judges_used_this_heat]
@@ -424,95 +458,127 @@ def assign_judges_equitable(
 # ========================
 # GENERATION HTML INTERACTIF
 # ========================
-def generate_html_planning(planning: dict, competition_name: str, judges: list) -> str:
+def generate_html_planning(planning: dict, competition_name: str, judges: list, competition_date=None) -> str:
     """
     Génère un HTML autonome avec sélection du juge et mise en évidence
     du prochain heat à juger (fond bleu) et des suivants (encadré bleu),
     les heats passés étant plus transparents.
+
+    La comparaison "passé / prochain / à venir" se fait sur le DATETIME complet
+    (date + heure du heat), donc fonctionne même si la compétition est sur
+    plusieurs jours.
+    Compatible Safari iOS : données injectées via <script type="application/json">.
     """
     now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
-    # Préparation des données par juge (triées par heure de début)
+    # Date par défaut (fallback) si la colonne ne contient pas de date
+    if competition_date is None:
+        default_date_str = datetime.now().strftime("%Y-%m-%d")
+    elif isinstance(competition_date, str):
+        default_date_str = competition_date
+    else:
+        default_date_str = competition_date.strftime("%Y-%m-%d")
+
+    # Préparation des données par juge (triées par datetime de début)
     data = {}
     for juge, creneaux in planning.items():
         if not creneaux:
             data[juge] = []
             continue
-        creneaux_tries = sorted(creneaux, key=lambda c: str(c.get('start', '')))
-        data[juge] = []
-        for c in creneaux_tries:
-            start_str = clean_text(str(c.get('start', '')))
-            end_str = clean_text(str(c.get('end', '')))
-            data[juge].append({
-                "start": start_str,
-                "end": end_str,
+
+        enriched = []
+        for c in creneaux:
+            start_raw = c.get('start', '')
+            end_raw = c.get('end', '')
+
+            start_time, start_date = extract_datetime_parts(start_raw, default_date_str)
+            end_time, end_date = extract_datetime_parts(end_raw, default_date_str)
+
+            # Construction des datetimes ISO
+            dt_start = f"{start_date}T{start_time}" if start_time else ""
+            dt_end = f"{end_date}T{end_time}" if end_time else ""
+
+            enriched.append({
+                "start": start_time or clean_text(str(start_raw)),
+                "end": end_time or clean_text(str(end_raw)),
                 "lane": clean_text(str(c.get('lane', ''))),
                 "wod": clean_text(str(c.get('wod', ''))),
                 "heat": clean_text(str(c.get('heat', ''))),
                 "athlete": clean_text(str(c.get('athlete', ''))),
                 "division": clean_text(str(c.get('division', ''))),
-                "start_key": start_str[:5],
-                "end_key": end_str[:5],
+                "dt_start": dt_start,
+                "dt_end": dt_end,
+                "sort_key": dt_start or f"{default_date_str}T{start_time}",
             })
 
+        enriched.sort(key=lambda x: x["sort_key"])
+        data[juge] = enriched
+
     judges_sorted = sorted(judges)
-    data_json = json.dumps(data, ensure_ascii=False)
-    judges_json = json.dumps(judges_sorted, ensure_ascii=False)
+
+    data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    judges_json = json.dumps(judges_sorted, ensure_ascii=False).replace("</", "<\\/")
+    now_json = json.dumps(now_iso)
+
     comp_name = clean_text(competition_name)
 
     html = f"""<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Planning Juges - {comp_name}</title>
 <style>
-  * {{ box-sizing: border-box; }}
+  * {{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }}
   body {{
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     background: #f5f7fa;
     margin: 0;
-    padding: 20px;
+    padding: 20px 14px;
     color: #222;
   }}
   h1 {{
     text-align: center;
     margin: 0 0 6px 0;
-    font-size: 26px;
+    font-size: 24px;
   }}
   .subtitle {{
     text-align: center;
     color: #666;
-    margin-bottom: 22px;
+    margin-bottom: 20px;
     font-size: 14px;
   }}
   .controls {{
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 24px;
+    gap: 10px;
+    margin-bottom: 20px;
     flex-wrap: wrap;
   }}
   .controls label {{ font-weight: 600; }}
   select {{
-    padding: 10px 14px;
+    padding: 12px 14px;
     font-size: 16px;
     border-radius: 8px;
     border: 1px solid #cbd5e1;
     background: #fff;
     min-width: 240px;
+    max-width: 100%;
     cursor: pointer;
+    -webkit-appearance: menulist;
+    appearance: menulist;
   }}
   .summary {{
     text-align: center;
-    margin-bottom: 18px;
+    margin-bottom: 16px;
     font-size: 14px;
     color: #475569;
   }}
   .summary strong {{ color: #1e3a8a; }}
   .heat-list {{
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 14px;
     max-width: 1400px;
     margin: 0 auto;
@@ -532,11 +598,12 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list) 
     color: #ffffff;
     opacity: 1;
     box-shadow: 0 6px 20px rgba(37,99,235,0.35);
-    transform: translateY(-2px);
   }}
   .heat-card.next .heat-time {{ color: #dbeafe; }}
   .heat-card.next .heat-meta {{ color: #bfdbfe; }}
   .heat-card.next .heat-athlete {{ color: #fff; }}
+  .heat-card.next .heat-date {{ color: #dbeafe; }}
+  .heat-card.next .heat-division {{ color: #dbeafe; }}
   .heat-card.upcoming {{
     background: #eff6ff;
     border-color: #3b82f6;
@@ -553,12 +620,19 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list) 
     align-items: baseline;
     margin-bottom: 8px;
     gap: 8px;
+    flex-wrap: wrap;
   }}
   .heat-time {{
     font-size: 18px;
     font-weight: 700;
     color: #0f172a;
     white-space: nowrap;
+  }}
+  .heat-date {{
+    font-size: 12px;
+    color: #64748b;
+    font-weight: 500;
+    margin-bottom: 6px;
   }}
   .heat-badge {{
     font-size: 11px;
@@ -593,7 +667,6 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list) 
     font-size: 12px;
     color: #64748b;
   }}
-  .heat-card.next .heat-division {{ color: #dbeafe; }}
   .empty {{
     text-align: center;
     color: #94a3b8;
@@ -604,7 +677,12 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list) 
     text-align: center;
     color: #64748b;
     font-size: 13px;
-    margin-bottom: 16px;
+    margin-bottom: 14px;
+  }}
+  @media (max-width: 600px) {{
+    select {{ min-width: 0; width: 100%; }}
+    .controls {{ flex-direction: column; align-items: stretch; }}
+    .controls label {{ text-align: center; }}
   }}
 </style>
 </head>
@@ -622,125 +700,200 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list) 
 
   <div class="heat-list" id="heat-list"></div>
 
+<script id="planning-data" type="application/json">{data_json}</script>
+<script id="judges-data" type="application/json">{judges_json}</script>
+<script id="now-data" type="application/json">{now_json}</script>
+
 <script>
-const DATA = {data_json};
-const JUDGES = {judges_json};
+(function () {{
+  "use strict";
 
-function toMinutes(hhmm) {{
-  if (!hhmm) return null;
-  const m = String(hhmm).match(/(\\d{{1,2}}):(\\d{{2}})/);
-  if (!m) return null;
-  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-}}
+  var DATA = {{}};
+  var JUDGES = [];
+  var NOW_ISO = "";
 
-function nowMinutes() {{
-  const d = new Date();
-  return d.getHours() * 60 + d.getMinutes();
-}}
+  try {{ DATA = JSON.parse(document.getElementById('planning-data').textContent); }}
+  catch (e) {{ console.error('DATA parse', e); }}
+  try {{ JUDGES = JSON.parse(document.getElementById('judges-data').textContent); }}
+  catch (e) {{ console.error('JUDGES parse', e); }}
+  try {{ NOW_ISO = JSON.parse(document.getElementById('now-data').textContent); }}
+  catch (e) {{ console.error('NOW parse', e); }}
 
-function fmtNow() {{
-  const d = new Date();
-  return d.toLocaleTimeString('fr-FR', {{hour: '2-digit', minute: '2-digit'}});
-}}
-
-function render(judgeName) {{
-  const list = document.getElementById('heat-list');
-  const summary = document.getElementById('summary');
-  const nowInfo = document.getElementById('now-info');
-  list.innerHTML = '';
-
-  const heats = DATA[judgeName] || [];
-  if (heats.length === 0) {{
-    summary.innerHTML = '';
-    nowInfo.textContent = '';
-    list.innerHTML = '<div class="empty">Aucun heat pour ce juge.</div>';
-    return;
+  // Parse "YYYY-MM-DDTHH:MM" -> Date locale
+  function parseLocalDateTime(iso) {{
+    if (!iso) return null;
+    var m = String(iso).match(/^(\\d{{4}})-(\\d{{2}})-(\\d{{2}})T(\\d{{2}}):(\\d{{2}})/);
+    if (!m) return null;
+    return new Date(
+      parseInt(m[1], 10),
+      parseInt(m[2], 10) - 1,
+      parseInt(m[3], 10),
+      parseInt(m[4], 10),
+      parseInt(m[5], 10),
+      0
+    );
   }}
 
-  const now = nowMinutes();
+  function nowDate() {{
+    return new Date();
+  }}
 
-  let nextIndex = -1;
-  for (let i = 0; i < heats.length; i++) {{
-    const s = toMinutes(heats[i].start_key);
-    const e = toMinutes(heats[i].end_key);
-    if (s !== null && e !== null && now >= s && now <= e) {{
-      nextIndex = i;
-      break;
+  function fmtNow() {{
+    var d = new Date();
+    var hh = ('0' + d.getHours()).slice(-2);
+    var mm = ('0' + d.getMinutes()).slice(-2);
+    var dd = ('0' + d.getDate()).slice(-2);
+    var mo = ('0' + (d.getMonth() + 1)).slice(-2);
+    var yy = d.getFullYear();
+    return dd + '/' + mo + '/' + yy + ' ' + hh + ':' + mm;
+  }}
+
+  function formatDateFr(isoDate) {{
+    if (!isoDate) return "";
+    var m = String(isoDate).match(/^(\\d{{4}})-(\\d{{2}})-(\\d{{2}})/);
+    if (!m) return isoDate;
+    return m[3] + '/' + m[2] + '/' + m[1];
+  }}
+
+  function escapeHtml(s) {{
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }}
+
+  function render(judgeName) {{
+    var list = document.getElementById('heat-list');
+    var summary = document.getElementById('summary');
+    var nowInfo = document.getElementById('now-info');
+    list.innerHTML = '';
+
+    var heats = DATA[judgeName] || [];
+    if (heats.length === 0) {{
+      summary.innerHTML = '';
+      nowInfo.textContent = '';
+      list.innerHTML = '<div class="empty">Aucun heat pour ce juge.</div>';
+      return;
     }}
-  }}
-  if (nextIndex === -1) {{
-    for (let i = 0; i < heats.length; i++) {{
-      const s = toMinutes(heats[i].start_key);
-      if (s !== null && s > now) {{
+
+    var now = nowDate();
+    var nowMs = now.getTime();
+
+    // 1) Heat en cours (dt_start <= now <= dt_end)
+    var nextIndex = -1;
+    for (var i = 0; i < heats.length; i++) {{
+      var s = parseLocalDateTime(heats[i].dt_start);
+      var e = parseLocalDateTime(heats[i].dt_end);
+      if (s && e && nowMs >= s.getTime() && nowMs <= e.getTime()) {{
         nextIndex = i;
         break;
       }}
     }}
-  }}
-
-  let pastCount = 0;
-  if (nextIndex === -1) {{
-    pastCount = heats.length;
-  }} else {{
-    pastCount = nextIndex;
-  }}
-
-  nowInfo.textContent = "🕐 Heure actuelle : " + fmtNow();
-
-  if (nextIndex === -1) {{
-    summary.innerHTML = "Tous les heats sont terminés — <strong>" + heats.length + "</strong> heats au total";
-  }} else {{
-    const remaining = heats.length - nextIndex;
-    summary.innerHTML = "✅ <strong>" + pastCount + "</strong> terminé(s) · 🎯 <strong>" + remaining + "</strong> restant(s) · " + heats.length + " au total";
-  }}
-
-  heats.forEach((h, i) => {{
-    const card = document.createElement('div');
-    card.className = 'heat-card';
-
-    let badge = '';
-    if (i === nextIndex) {{
-      card.classList.add('next');
-      badge = '<span class="heat-badge">🎯 Prochain</span>';
-    }} else if (nextIndex !== -1 && i > nextIndex) {{
-      card.classList.add('upcoming');
-      badge = '<span class="heat-badge">À venir</span>';
-    }} else {{
-      card.classList.add('past');
-      badge = '<span class="heat-badge" style="background:#f1f5f9;color:#94a3b8;">Passé</span>';
+    // 2) Sinon premier heat dont dt_start > now
+    if (nextIndex === -1) {{
+      for (var j = 0; j < heats.length; j++) {{
+        var s2 = parseLocalDateTime(heats[j].dt_start);
+        if (s2 && s2.getTime() > nowMs) {{
+          nextIndex = j;
+          break;
+        }}
+      }}
     }}
 
-    card.innerHTML = `
-      <div class="heat-header">
-        <span class="heat-time">${{h.start}} – ${{h.end}}</span>
-        ${{badge}}
-      </div>
-      <div class="heat-meta">${{h.wod}} · ${{h.heat}} · Lane ${{h.lane}}</div>
-      <div class="heat-athlete">${{h.athlete}}</div>
-      <div class="heat-division">${{h.division}}</div>
-    `;
-    list.appendChild(card);
-  }});
-}}
+    var pastCount = (nextIndex === -1) ? heats.length : nextIndex;
 
-const select = document.getElementById('judge-select');
-JUDGES.forEach(j => {{
-  const opt = document.createElement('option');
-  opt.value = j;
-  opt.textContent = j;
-  select.appendChild(opt);
-}});
+    nowInfo.textContent = "🕐 Heure actuelle : " + fmtNow();
 
-select.addEventListener('change', () => render(select.value));
+    if (nextIndex === -1) {{
+      summary.innerHTML = "Tous les heats sont terminés — <strong>" + heats.length + "</strong> heats au total";
+    }} else {{
+      var remaining = heats.length - nextIndex;
+      summary.innerHTML = "✅ <strong>" + pastCount + "</strong> terminé(s) · 🎯 <strong>" + remaining + "</strong> restant(s) · " + heats.length + " au total";
+    }}
 
-if (JUDGES.length > 0) {{
-  select.value = JUDGES[0];
-  render(JUDGES[0]);
-}}
+    heats.forEach(function (h, idx) {{
+      var card = document.createElement('div');
+      card.className = 'heat-card';
 
-setInterval(() => {{
-  if (select.value) render(select.value);
-}}, 30000);
+      var badgeHtml = '';
+      if (idx === nextIndex) {{
+        card.classList.add('next');
+        badgeHtml = '<span class="heat-badge">🎯 Prochain</span>';
+      }} else if (nextIndex !== -1 && idx > nextIndex) {{
+        card.classList.add('upcoming');
+        badgeHtml = '<span class="heat-badge">À venir</span>';
+      }} else {{
+        card.classList.add('past');
+        badgeHtml = '<span class="heat-badge" style="background:#f1f5f9;color:#94a3b8;">Passé</span>';
+      }}
+
+      // Date affichée sur la carte
+      var datePart = '';
+      var mDate = String(h.dt_start || '').match(/^(\\d{{4}})-(\\d{{2}})-(\\d{{2}})/);
+      if (mDate) {{
+        datePart = '<div class="heat-date">📅 ' + formatDateFr(mDate[0]) + '</div>';
+      }}
+
+      card.innerHTML =
+        '<div class="heat-header">' +
+          '<span class="heat-time">' + escapeHtml(h.start) + ' – ' + escapeHtml(h.end) + '</span>' +
+          badgeHtml +
+        '</div>' +
+        datePart +
+        '<div class="heat-meta">' + escapeHtml(h.wod) + ' · ' + escapeHtml(h.heat) + ' · Lane ' + escapeHtml(h.lane) + '</div>' +
+        '<div class="heat-athlete">' + escapeHtml(h.athlete) + '</div>' +
+        '<div class="heat-division">' + escapeHtml(h.division) + '</div>';
+
+      list.appendChild(card);
+    }});
+  }}
+
+  function populateSelect() {{
+    var select = document.getElementById('judge-select');
+    while (select.options.length > 0) {{
+      select.remove(0);
+    }}
+    if (!JUDGES || JUDGES.length === 0) {{
+      var optEmpty = document.createElement('option');
+      optEmpty.value = '';
+      optEmpty.textContent = '(aucun juge)';
+      select.appendChild(optEmpty);
+      return;
+    }}
+    JUDGES.forEach(function (j) {{
+      var opt = document.createElement('option');
+      opt.value = j;
+      opt.textContent = j;
+      select.appendChild(opt);
+    }});
+  }}
+
+  function init() {{
+    populateSelect();
+    var select = document.getElementById('judge-select');
+
+    select.addEventListener('change', function () {{
+      render(select.value);
+    }});
+
+    if (JUDGES.length > 0) {{
+      select.value = JUDGES[0];
+      render(JUDGES[0]);
+    }}
+
+    setInterval(function () {{
+      if (select.value) render(select.value);
+    }}, 30000);
+  }}
+
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', init);
+  }} else {{
+    init();
+  }}
+}})();
 </script>
 </body>
 </html>"""
@@ -764,6 +917,11 @@ def main():
         competition_name = st.text_input(
             "Nom de la compétition",
             "Unicorn Throwdown"
+        )
+
+        competition_date = st.date_input(
+            "Date de la compétition (fallback si absente du fichier)",
+            value=datetime.now().date()
         )
 
         st.header("👨‍⚖️ Juges")
@@ -1029,7 +1187,8 @@ def main():
             html_content = generate_html_planning(
                 planning,
                 competition_name,
-                judges
+                judges,
+                competition_date
             )
 
             st.download_button(
