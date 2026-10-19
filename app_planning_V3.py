@@ -454,7 +454,6 @@ def assign_judges_equitable(
 
     return planning
 
-
 # ========================
 # GENERATION HTML INTERACTIF
 # ========================
@@ -467,11 +466,12 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list, 
     La comparaison "passé / prochain / à venir" se fait sur le DATETIME complet
     (date + heure du heat), donc fonctionne même si la compétition est sur
     plusieurs jours.
-    Compatible Safari iOS : données injectées via <script type="application/json">.
+
+    Compatible Safari iOS en file://, mail, Fichiers, etc.
+    Les données sont injectées en JS via json.dumps (aucune balise script JSON).
     """
     now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
-    # Date par défaut (fallback) si la colonne ne contient pas de date
     if competition_date is None:
         default_date_str = datetime.now().strftime("%Y-%m-%d")
     elif isinstance(competition_date, str):
@@ -479,7 +479,6 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list, 
     else:
         default_date_str = competition_date.strftime("%Y-%m-%d")
 
-    # Préparation des données par juge (triées par datetime de début)
     data = {}
     for juge, creneaux in planning.items():
         if not creneaux:
@@ -494,7 +493,6 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list, 
             start_time, start_date = extract_datetime_parts(start_raw, default_date_str)
             end_time, end_date = extract_datetime_parts(end_raw, default_date_str)
 
-            # Construction des datetimes ISO
             dt_start = f"{start_date}T{start_time}" if start_time else ""
             dt_end = f"{end_date}T{end_time}" if end_time else ""
 
@@ -516,9 +514,20 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list, 
 
     judges_sorted = sorted(judges)
 
-    data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
-    judges_json = json.dumps(judges_sorted, ensure_ascii=False).replace("</", "<\\/")
-    now_json = json.dumps(now_iso)
+    # --- Sérialisation JS robuste ---
+    # json.dumps produit une string JSON valide.
+    # On l'échappe pour qu'elle soit utilisable comme littéral JS string
+    # (double-encode), puis on la parse côté JS avec JSON.parse.
+    # Cela évite TOUT problème avec les <script type="application/json">.
+    def to_js_string(obj):
+        # 1) JSON standard
+        json_str = json.dumps(obj, ensure_ascii=False)
+        # 2) Encodage en littéral JS via json.dumps (ajoute les guillemets et échappe)
+        return json.dumps(json_str, ensure_ascii=False)
+
+    data_js = to_js_string(data)          # "{\"juge1\": [...]}"  (string JS)
+    judges_js = to_js_string(judges_sorted)
+    now_js = to_js_string(now_iso)
 
     comp_name = clean_text(competition_name)
 
@@ -679,6 +688,16 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list, 
     font-size: 13px;
     margin-bottom: 14px;
   }}
+  .debug {{
+    text-align: center;
+    color: #c00;
+    font-size: 12px;
+    margin: 10px 0;
+    padding: 8px;
+    background: #fee;
+    border: 1px solid #fbb;
+    border-radius: 6px;
+  }}
   @media (max-width: 600px) {{
     select {{ min-width: 0; width: 100%; }}
     .controls {{ flex-direction: column; align-items: stretch; }}
@@ -695,31 +714,48 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list, 
     <select id="judge-select"></select>
   </div>
 
+  <div id="debug" class="debug" style="display:none;"></div>
+
   <div class="now-info" id="now-info"></div>
   <div class="summary" id="summary"></div>
 
   <div class="heat-list" id="heat-list"></div>
 
-<script id="planning-data" type="application/json">{data_json}</script>
-<script id="judges-data" type="application/json">{judges_json}</script>
-<script id="now-data" type="application/json">{now_json}</script>
-
 <script>
 (function () {{
   "use strict";
 
+  // ---- Données injectées en littéraux JS string (universel, y compris file://) ----
+  var DATA_RAW = {data_js};
+  var JUDGES_RAW = {judges_js};
+  var NOW_RAW = {now_js};
+
   var DATA = {{}};
   var JUDGES = [];
   var NOW_ISO = "";
+  var errors = [];
 
-  try {{ DATA = JSON.parse(document.getElementById('planning-data').textContent); }}
-  catch (e) {{ console.error('DATA parse', e); }}
-  try {{ JUDGES = JSON.parse(document.getElementById('judges-data').textContent); }}
-  catch (e) {{ console.error('JUDGES parse', e); }}
-  try {{ NOW_ISO = JSON.parse(document.getElementById('now-data').textContent); }}
-  catch (e) {{ console.error('NOW parse', e); }}
+  try {{ DATA = JSON.parse(DATA_RAW); }}
+  catch (e) {{ errors.push('DATA: ' + e.message); }}
 
-  // Parse "YYYY-MM-DDTHH:MM" -> Date locale
+  try {{ JUDGES = JSON.parse(JUDGES_RAW); }}
+  catch (e) {{ errors.push('JUDGES: ' + e.message); }}
+
+  try {{ NOW_ISO = JSON.parse(NOW_RAW); }}
+  catch (e) {{ errors.push('NOW: ' + e.message); }}
+
+  function showError(msg) {{
+    var d = document.getElementById('debug');
+    if (d) {{
+      d.style.display = 'block';
+      d.textContent = msg;
+    }}
+  }}
+
+  if (errors.length > 0) {{
+    showError('⚠️ Erreur de chargement : ' + errors.join(' | '));
+  }}
+
   function parseLocalDateTime(iso) {{
     if (!iso) return null;
     var m = String(iso).match(/^(\\d{{4}})-(\\d{{2}})-(\\d{{2}})T(\\d{{2}}):(\\d{{2}})/);
@@ -778,10 +814,8 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list, 
       return;
     }}
 
-    var now = nowDate();
-    var nowMs = now.getTime();
+    var nowMs = nowDate().getTime();
 
-    // 1) Heat en cours (dt_start <= now <= dt_end)
     var nextIndex = -1;
     for (var i = 0; i < heats.length; i++) {{
       var s = parseLocalDateTime(heats[i].dt_start);
@@ -791,7 +825,6 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list, 
         break;
       }}
     }}
-    // 2) Sinon premier heat dont dt_start > now
     if (nextIndex === -1) {{
       for (var j = 0; j < heats.length; j++) {{
         var s2 = parseLocalDateTime(heats[j].dt_start);
@@ -829,7 +862,6 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list, 
         badgeHtml = '<span class="heat-badge" style="background:#f1f5f9;color:#94a3b8;">Passé</span>';
       }}
 
-      // Date affichée sur la carte
       var datePart = '';
       var mDate = String(h.dt_start || '').match(/^(\\d{{4}})-(\\d{{2}})-(\\d{{2}})/);
       if (mDate) {{
@@ -852,9 +884,15 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list, 
 
   function populateSelect() {{
     var select = document.getElementById('judge-select');
-    while (select.options.length > 0) {{
-      select.remove(0);
+    if (!select) {{
+      showError('⚠️ Élément select introuvable');
+      return;
     }}
+    // Vider (méthode Safari-safe)
+    while (select.firstChild) {{
+      select.removeChild(select.firstChild);
+    }}
+
     if (!JUDGES || JUDGES.length === 0) {{
       var optEmpty = document.createElement('option');
       optEmpty.value = '';
@@ -862,6 +900,7 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list, 
       select.appendChild(optEmpty);
       return;
     }}
+
     JUDGES.forEach(function (j) {{
       var opt = document.createElement('option');
       opt.value = j;
@@ -873,6 +912,11 @@ def generate_html_planning(planning: dict, competition_name: str, judges: list, 
   function init() {{
     populateSelect();
     var select = document.getElementById('judge-select');
+
+    if (!select) {{
+      showError('⚠️ Impossible d’initialiser la liste des juges');
+      return;
+    }}
 
     select.addEventListener('change', function () {{
       render(select.value);
